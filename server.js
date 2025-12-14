@@ -286,6 +286,7 @@ const emitToAdminRoom = (notification) => {
 export { io, emitNotification, emitToAdminRoom };
 
 httpServer.listen(PORT, () => {
+  console.log('Hi ITWOS')
   console.log(`Server is running on port ${PORT}`);
   console.log(`Socket.IO server is ready`);
 });
