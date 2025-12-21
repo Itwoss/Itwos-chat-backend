@@ -41,6 +41,22 @@ const postSchema = new mongoose.Schema({
     default: false,
     index: true
   },
+  isRemoved: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  removedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  removedAt: {
+    type: Date
+  },
+  removalReason: {
+    type: String,
+    trim: true
+  },
   likes: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -63,6 +79,7 @@ const postSchema = new mongoose.Schema({
 postSchema.index({ author: 1, createdAt: -1 });
 postSchema.index({ author: 1, isArchived: 1, createdAt: -1 });
 postSchema.index({ createdAt: -1 });
+postSchema.index({ isRemoved: 1, createdAt: -1 });
 
 const Post = mongoose.model('Post', postSchema);
 

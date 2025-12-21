@@ -33,6 +33,10 @@ friendRequestSchema.index({ toUser: 1, status: 1 });
 friendRequestSchema.index({ fromUser: 1, status: 1 });
 friendRequestSchema.index({ status: 1 });
 friendRequestSchema.index({ fromUser: 1, toUser: 1, status: 1 });
+// Additional indexes for scalability
+friendRequestSchema.index({ fromUser: 1, status: 1, createdAt: -1 });
+friendRequestSchema.index({ toUser: 1, status: 1, createdAt: -1 });
+friendRequestSchema.index({ createdAt: -1 });
 
 // Prevent duplicate requests
 friendRequestSchema.index({ fromUser: 1, toUser: 1 }, { unique: true });

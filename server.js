@@ -27,6 +27,7 @@ import bannerRoutes from './routes/bannerRoutes.js';
 import adminBannerRoutes from './routes/adminBannerRoutes.js';
 import storyRoutes from './routes/storyRoutes.js';
 import adminStoryRoutes from './routes/adminStoryRoutes.js';
+import adminPostRoutes from './routes/adminPostRoutes.js';
 import { authenticateSocket } from './middleware/socketAuth.js';
 import { startSubscriptionCron } from './utils/subscriptionCron.js';
 import { startStoryCron } from './utils/storyCron.js';
@@ -96,6 +97,7 @@ app.use('/api/banners', bannerRoutes);
 app.use('/api/admin/banners', adminBannerRoutes);
 app.use('/api/user/stories', storyRoutes);
 app.use('/api/admin/stories', adminStoryRoutes);
+app.use('/api/admin/posts', adminPostRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

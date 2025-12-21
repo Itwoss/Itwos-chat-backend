@@ -2,6 +2,7 @@ import express from 'express';
 import { body } from 'express-validator';
 import {
   getUserSuggestions,
+  getUsersNearYou,
   sendFriendRequest,
   acceptFriendRequest,
   rejectFriendRequest,
@@ -32,6 +33,7 @@ const sendRequestValidation = [
 
 // Routes
 router.get('/suggestions', getUserSuggestions);
+router.get('/near-you', getUsersNearYou);
 router.get('/requests', getFriendRequests);
 router.get('/friends', getUserFriends);
 router.get('/followers', getFollowers);

@@ -356,13 +356,15 @@ export const sendMessage = async (req, res) => {
         // Determine message type based on file
         if (req.file.mimetype.startsWith('image/')) {
           messageType = 'image';
+        } else if (req.file.mimetype.startsWith('audio/')) {
+          messageType = 'audio';
         } else {
           messageType = 'file';
         }
         
         attachments = [{
           url: result.secure_url,
-          type: messageType,
+          type: messageType, // 'image', 'audio', or 'file'
           name: req.file.originalname,
         }];
         

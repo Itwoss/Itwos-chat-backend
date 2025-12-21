@@ -11,6 +11,12 @@ import Meeting from '../models/Meeting.js';
 import Chat from '../models/Chat.js';
 import Message from '../models/Message.js';
 import FriendRequest from '../models/FriendRequest.js';
+import Post from '../models/Post.js';
+import Story from '../models/Story.js';
+import Subscription from '../models/Subscription.js';
+import Banner from '../models/Banner.js';
+import Notification from '../models/Notification.js';
+import Payment from '../models/Payment.js';
 
 // Login admin
 export const loginAdmin = async (req, res) => {
@@ -236,15 +242,23 @@ export const updateAdminProfile = async (req, res) => {
     }
 
     // Check if email is being changed and if it's already taken
-    if (email && email !== admin.email) {
-      const existingUser = await User.findOne({ email });
+    // Normalize emails to lowercase for comparison
+    const normalizedEmail = email ? email.trim().toLowerCase() : null;
+    const currentEmail = admin.email ? admin.email.trim().toLowerCase() : null;
+    
+    if (normalizedEmail && normalizedEmail !== currentEmail) {
+      // Check if email exists, excluding the current admin
+      const existingUser = await User.findOne({ 
+        email: normalizedEmail,
+        _id: { $ne: adminId }
+      });
       if (existingUser) {
         return res.status(400).json({
           success: false,
           message: 'Email already in use'
         });
       }
-      admin.email = email;
+      admin.email = normalizedEmail;
     }
 
     if (name) admin.name = name;
@@ -305,39 +319,123 @@ export const updateAdminProfile = async (req, res) => {
   }
 };
 
-// Get admin dashboard stats
+// Get admin dashboard stats - Optimized with aggregation
 export const getAdminStats = async (req, res) => {
   try {
-    // Get all stats in parallel for better performance
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    // Get all stats in parallel for better performance - using lean() and optimized queries
     const [
+      // Users
       totalUsers,
       activeUsers,
+      usersWithLocation,
+      usersWithSubscriptions,
+      recentUsers,
+      usersLast30Days,
+      
+      // Projects
       totalProjects,
       activeProjects,
+      recentProjects,
+      
+      // Teams
       totalTeams,
       activeTeams,
+      
+      // Bookings
       totalBookings,
       confirmedBookings,
       pendingBookings,
+      recentBookings,
+      
+      // Client Projects
       totalClientProjects,
       activeClientProjects,
+      
+      // Meetings
       totalMeetings,
       pendingMeetings,
       scheduledMeetings,
+      
+      // Social - Chats & Messages
       totalChats,
       totalMessages,
+      unreadMessages,
+      
+      // Friendships
       totalFriendships,
-      recentUsers,
-      recentBookings,
-      recentProjects
+      
+      // Posts
+      totalPosts,
+      archivedPosts,
+      postsWithImages,
+      postsWithSongs,
+      totalLikes,
+      totalComments,
+      recentPosts,
+      
+      // Stories
+      totalStories,
+      activeStories,
+      expiredStories,
+      totalStoryViews,
+      totalStoryLikes,
+      totalStoryReplies,
+      recentStories,
+      
+      // Subscriptions
+      totalSubscriptions,
+      activeSubscriptions,
+      expiredSubscriptions,
+      subscriptionsByBadge,
+      totalRevenue,
+      monthlyRevenue,
+      
+      // Banners
+      totalBanners,
+      activeBanners,
+      totalBannerPurchases,
+      bannersByRarity,
+      
+      // Notifications
+      totalNotifications,
+      unreadNotifications,
+      notificationsByType,
+      
+      // Payments
+      totalPayments,
+      successfulPayments,
+      pendingPayments,
+      totalPaymentAmount
     ] = await Promise.all([
-      // Users
+      // Users - countDocuments returns a number directly
       User.countDocuments({ role: { $ne: 'admin' } }),
       User.countDocuments({ role: { $ne: 'admin' }, isActive: true }),
+      User.countDocuments({ 
+        role: { $ne: 'admin' },
+        'address.country': { $exists: true, $ne: '' }
+      }),
+      User.countDocuments({ 
+        role: { $ne: 'admin' },
+        'subscription.badgeType': { $exists: true, $ne: null }
+      }),
+      User.countDocuments({
+        role: { $ne: 'admin' },
+        createdAt: { $gte: sevenDaysAgo }
+      }),
+      User.countDocuments({
+        role: { $ne: 'admin' },
+        createdAt: { $gte: thirtyDaysAgo }
+      }),
       
       // Projects
       Project.countDocuments(),
       Project.countDocuments({ isActive: true }),
+      Project.countDocuments({
+        createdAt: { $gte: sevenDaysAgo }
+      }),
       
       // Teams
       Team.countDocuments(),
@@ -347,6 +445,9 @@ export const getAdminStats = async (req, res) => {
       DemoBooking.countDocuments(),
       DemoBooking.countDocuments({ status: 'confirmed' }),
       DemoBooking.countDocuments({ status: 'pending' }),
+      DemoBooking.countDocuments({
+        createdAt: { $gte: sevenDaysAgo }
+      }),
       
       // Client Projects
       ClientProject.countDocuments(),
@@ -360,21 +461,109 @@ export const getAdminStats = async (req, res) => {
       // Chats & Messages
       Chat.countDocuments({ isActive: true }),
       Message.countDocuments({ isDeleted: false }),
+      Message.countDocuments({ isDeleted: false, isRead: false }),
       
       // Friendships
       FriendRequest.countDocuments({ status: 'accepted' }),
       
-      // Recent activity (last 7 days)
-      User.countDocuments({
-        role: { $ne: 'admin' },
-        createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+      // Posts
+      Post.countDocuments(),
+      Post.countDocuments({ isArchived: true }),
+      Post.countDocuments({ images: { $exists: true, $ne: [] } }),
+      Post.countDocuments({ song: { $exists: true, $ne: null } }),
+      Post.aggregate([
+        { $project: { likesCount: { $size: { $ifNull: ['$likes', []] } } } },
+        { $group: { _id: null, total: { $sum: '$likesCount' } } }
+      ]).then(result => result[0]?.total || 0),
+      Post.aggregate([
+        { $project: { commentsCount: { $size: { $ifNull: ['$comments', []] } } } },
+        { $group: { _id: null, total: { $sum: '$commentsCount' } } }
+      ]).then(result => result[0]?.total || 0),
+      Post.countDocuments({
+        createdAt: { $gte: sevenDaysAgo }
       }),
-      DemoBooking.countDocuments({
-        createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+      
+      // Stories
+      Story.countDocuments(),
+      Story.countDocuments({ expiresAt: { $gt: new Date() } }),
+      Story.countDocuments({ expiresAt: { $lte: new Date() } }),
+      Story.aggregate([
+        { $group: { _id: null, total: { $sum: '$viewCount' } } }
+      ]).then(result => result[0]?.total || 0),
+      Story.aggregate([
+        { $group: { _id: null, total: { $sum: '$likeCount' } } }
+      ]).then(result => result[0]?.total || 0),
+      Story.aggregate([
+        { $group: { _id: null, total: { $sum: '$replyCount' } } }
+      ]).then(result => result[0]?.total || 0),
+      Story.countDocuments({
+        createdAt: { $gte: sevenDaysAgo }
       }),
-      Project.countDocuments({
-        createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-      })
+      
+      // Subscriptions - using aggregation
+      Subscription.countDocuments(),
+      Subscription.countDocuments({ status: 'active' }),
+      Subscription.countDocuments({ status: 'expired' }),
+      Subscription.aggregate([
+        { $group: { _id: '$badgeType', count: { $sum: 1 } } }
+      ]).then(result => {
+        const badges = { blue: 0, yellow: 0, pink: 0 };
+        result.forEach(item => {
+          if (item._id) badges[item._id] = item.count;
+        });
+        return badges;
+      }),
+      Payment.aggregate([
+        { $match: { paymentStatus: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]).then(result => result[0]?.total || 0),
+      Payment.aggregate([
+        { 
+          $match: { 
+            paymentStatus: 'completed',
+            createdAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) }
+          } 
+        },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]).then(result => result[0]?.total || 0),
+      
+      // Banners
+      Banner.countDocuments(),
+      Banner.countDocuments({ isActive: true }),
+      Banner.aggregate([
+        { $group: { _id: null, total: { $sum: '$purchaseCount' } } }
+      ]).then(result => result[0]?.total || 0),
+      Banner.aggregate([
+        { $group: { _id: '$rarity', count: { $sum: 1 } } }
+      ]).then(result => {
+        const rarities = {};
+        result.forEach(item => {
+          rarities[item._id] = item.count;
+        });
+        return rarities;
+      }),
+      
+      // Notifications
+      Notification.countDocuments(),
+      Notification.countDocuments({ isRead: false }),
+      Notification.aggregate([
+        { $group: { _id: '$type', count: { $sum: 1 } } }
+      ]).then(result => {
+        const types = {};
+        result.forEach(item => {
+          types[item._id] = item.count;
+        });
+        return types;
+      }),
+      
+      // Payments
+      Payment.countDocuments(),
+      Payment.countDocuments({ paymentStatus: 'completed' }),
+      Payment.countDocuments({ paymentStatus: 'pending' }),
+      Payment.aggregate([
+        { $match: { paymentStatus: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]).then(result => result[0]?.total || 0)
     ]);
 
     // Calculate friends count (mutual follows create 2 records)
@@ -387,7 +576,10 @@ export const getAdminStats = async (req, res) => {
           total: totalUsers,
           active: activeUsers,
           inactive: totalUsers - activeUsers,
-          recent: recentUsers
+          withLocation: usersWithLocation,
+          withSubscriptions: usersWithSubscriptions,
+          recent: recentUsers,
+          last30Days: usersLast30Days
         },
         projects: {
           total: totalProjects,
@@ -419,11 +611,58 @@ export const getAdminStats = async (req, res) => {
         social: {
           totalChats: totalChats,
           totalMessages: totalMessages,
+          unreadMessages: unreadMessages,
           totalFriends: friendsCount
+        },
+        posts: {
+          total: totalPosts,
+          archived: archivedPosts,
+          active: totalPosts - archivedPosts,
+          withImages: postsWithImages,
+          withSongs: postsWithSongs,
+          totalLikes: totalLikes,
+          totalComments: totalComments,
+          recent: recentPosts
+        },
+        stories: {
+          total: totalStories,
+          active: activeStories,
+          expired: expiredStories,
+          totalViews: totalStoryViews,
+          totalLikes: totalStoryLikes,
+          totalReplies: totalStoryReplies,
+          recent: recentStories
+        },
+        subscriptions: {
+          total: totalSubscriptions,
+          active: activeSubscriptions,
+          expired: expiredSubscriptions,
+          byBadge: subscriptionsByBadge,
+          totalRevenue: totalRevenue,
+          monthlyRevenue: monthlyRevenue
+        },
+        banners: {
+          total: totalBanners,
+          active: activeBanners,
+          totalPurchases: totalBannerPurchases,
+          byRarity: bannersByRarity
+        },
+        notifications: {
+          total: totalNotifications,
+          unread: unreadNotifications,
+          read: totalNotifications - unreadNotifications,
+          byType: notificationsByType
+        },
+        payments: {
+          total: totalPayments,
+          successful: successfulPayments,
+          pending: pendingPayments,
+          totalAmount: totalPaymentAmount
         }
       }
     });
   } catch (error) {
+    console.error('Error fetching admin stats:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch dashboard stats',

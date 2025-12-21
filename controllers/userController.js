@@ -458,6 +458,7 @@ export const getCurrentUser = async (req, res) => {
           hideLastSeen: false,
           hideOnlineStatus: false
         },
+        address: user.address || null,
         subscription: subscriptionData,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
@@ -512,8 +513,27 @@ export const updateUserProfile = async (req, res) => {
       });
     }
 
-    const { name, email, password, countryCode, phoneNumber, accountType, privacySettings } = req.body;
+    let { name, email, password, countryCode, phoneNumber, accountType, privacySettings, address } = req.body;
     const userId = req.user._id;
+
+    // Handle address from FormData (nested fields) or JSON
+    if (!address && (req.body['address[street]'] !== undefined || req.body['address[district]'] !== undefined)) {
+      // Reconstruct address object from FormData nested fields
+      address = {
+        street: req.body['address[street]'] || '',
+        district: req.body['address[district]'] || '',
+        state: req.body['address[state]'] || '',
+        country: req.body['address[country]'] || '',
+        pinCode: req.body['address[pinCode]'] || ''
+      };
+    } else if (typeof address === 'string') {
+      // Parse address if it's a JSON string
+      try {
+        address = JSON.parse(address);
+      } catch (e) {
+        address = null;
+      }
+    }
 
     const user = await User.findById(userId);
     if (!user) {
@@ -524,15 +544,23 @@ export const updateUserProfile = async (req, res) => {
     }
 
     // Check if email is being changed and if it's already taken
-    if (email && email !== user.email) {
-      const existingUser = await User.findOne({ email });
+    // Normalize emails to lowercase for comparison
+    const normalizedEmail = email ? email.trim().toLowerCase() : null;
+    const currentEmail = user.email ? user.email.trim().toLowerCase() : null;
+    
+    if (normalizedEmail && normalizedEmail !== currentEmail) {
+      // Check if email exists, excluding the current user
+      const existingUser = await User.findOne({ 
+        email: normalizedEmail,
+        _id: { $ne: userId }
+      });
       if (existingUser) {
         return res.status(400).json({
           success: false,
           message: 'Email already in use'
         });
       }
-      user.email = email;
+      user.email = normalizedEmail;
     }
 
     if (name) user.name = name;
@@ -595,6 +623,18 @@ export const updateUserProfile = async (req, res) => {
       }
     }
 
+    // Update address if provided
+    if (address) {
+      if (!user.address) {
+        user.address = {};
+      }
+      if (address.street !== undefined) user.address.street = address.street?.trim() || '';
+      if (address.district !== undefined) user.address.district = address.district?.trim() || '';
+      if (address.state !== undefined) user.address.state = address.state?.trim() || '';
+      if (address.country !== undefined) user.address.country = address.country?.trim() || '';
+      if (address.pinCode !== undefined) user.address.pinCode = address.pinCode?.trim() || '';
+    }
+
     await user.save();
 
     const userResponse = await User.findById(userId).select('-password');
@@ -619,6 +659,7 @@ export const updateUserProfile = async (req, res) => {
           hideLastSeen: false,
           hideOnlineStatus: false
         },
+        address: userResponse.address || null,
         createdAt: userResponse.createdAt,
         updatedAt: userResponse.updatedAt
       }

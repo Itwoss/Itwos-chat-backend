@@ -125,7 +125,8 @@ export const getFeed = async (req, res) => {
     const allAuthorIds = new Set([userId.toString(), ...Array.from(friendIds), ...publicUserIds]);
     
     const query = {
-      author: { $in: Array.from(allAuthorIds) }
+      author: { $in: Array.from(allAuthorIds) },
+      isRemoved: { $ne: true } // Exclude removed posts
     };
 
     const posts = await Post.find(query)
@@ -175,9 +176,13 @@ export const getUserPosts = async (req, res) => {
       });
     }
 
-    // If viewing own posts, show all (with archive filter)
+    // If viewing own posts, show all (with archive filter) but exclude removed posts
     if (userId === currentUserId.toString()) {
-      const query = { author: userId, isArchived: showArchived };
+      const query = { 
+        author: userId, 
+        isArchived: showArchived,
+        isRemoved: { $ne: true } // Exclude removed posts even from own profile
+      };
       
       const posts = await Post.find(query)
         .populate('author', 'name email profileImage accountType')
@@ -201,9 +206,13 @@ export const getUserPosts = async (req, res) => {
       });
     }
 
-    // If public account, anyone can view (but not archived posts)
+    // If public account, anyone can view (but not archived or removed posts)
     if (targetUser.accountType === 'public') {
-      const query = { author: userId, isArchived: false };
+      const query = { 
+        author: userId, 
+        isArchived: false,
+        isRemoved: { $ne: true } // Exclude removed posts
+      };
       
       const posts = await Post.find(query)
         .populate('author', 'name email profileImage accountType')
@@ -242,8 +251,12 @@ export const getUserPosts = async (req, res) => {
       });
     }
 
-    // Private account - only show non-archived posts to friends
-    const query = { author: userId, isArchived: false };
+    // Private account - only show non-archived and non-removed posts to friends
+    const query = { 
+      author: userId, 
+      isArchived: false,
+      isRemoved: { $ne: true } // Exclude removed posts
+    };
     
     const posts = await Post.find(query)
       .populate('author', 'name email profileImage accountType subscription')
@@ -285,6 +298,14 @@ export const toggleLike = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Post not found'
+      });
+    }
+
+    // Check if post is removed
+    if (post.isRemoved) {
+      return res.status(403).json({
+        success: false,
+        message: 'This post has been removed'
       });
     }
 
@@ -347,6 +368,14 @@ export const addComment = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Post not found'
+      });
+    }
+
+    // Check if post is removed
+    if (post.isRemoved) {
+      return res.status(403).json({
+        success: false,
+        message: 'This post has been removed and cannot be commented on'
       });
     }
 

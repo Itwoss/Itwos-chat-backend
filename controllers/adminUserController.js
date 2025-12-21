@@ -169,8 +169,16 @@ export const updateUser = async (req, res) => {
     }
 
     // Check if email is being changed and if it's already taken
-    if (email && email !== user.email) {
-      const existingUser = await User.findOne({ email });
+    // Normalize emails to lowercase for comparison
+    const normalizedEmail = email ? email.trim().toLowerCase() : null;
+    const currentEmail = user.email ? user.email.trim().toLowerCase() : null;
+    
+    if (normalizedEmail && normalizedEmail !== currentEmail) {
+      // Check if email exists, excluding the current user
+      const existingUser = await User.findOne({ 
+        email: normalizedEmail,
+        _id: { $ne: userId }
+      });
       if (existingUser) {
         return res.status(400).json({
           success: false,
@@ -181,7 +189,7 @@ export const updateUser = async (req, res) => {
 
     // Update fields
     if (name) user.name = name;
-    if (email) user.email = email;
+    if (normalizedEmail) user.email = normalizedEmail;
     if (role) user.role = role;
     if (typeof isActive === 'boolean') user.isActive = isActive;
     

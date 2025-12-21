@@ -94,6 +94,67 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Banner',
     default: null
+  },
+  address: {
+    street: {
+      type: String,
+      trim: true
+    },
+    district: {
+      type: String,
+      trim: true
+    },
+    state: {
+      type: String,
+      trim: true
+    },
+    country: {
+      type: String,
+      trim: true
+    },
+    pinCode: {
+      type: String,
+      trim: true
+    }
+  },
+  warnings: [{
+    type: {
+      type: String,
+      enum: ['post', 'story', 'general'],
+      required: true
+    },
+    reason: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    contentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      refPath: 'warnings.contentType'
+    },
+    contentType: {
+      type: String,
+      enum: ['Post', 'Story']
+    },
+    warnedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    warnedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  isBlocked: {
+    type: Boolean,
+    default: false
+  },
+  blockedAt: {
+    type: Date
+  },
+  blockedReason: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true
@@ -102,6 +163,14 @@ const userSchema = new mongoose.Schema({
 // Index for faster queries
 userSchema.index({ email: 1 });
 userSchema.index({ role: 1 });
+userSchema.index({ 'address.district': 1, 'address.state': 1, 'address.country': 1 });
+userSchema.index({ 'address.pinCode': 1 });
+// Additional indexes for scalability
+userSchema.index({ accountType: 1, isActive: 1 });
+userSchema.index({ createdAt: -1 });
+userSchema.index({ onlineStatus: 1, lastSeen: -1 });
+userSchema.index({ 'subscription.badgeType': 1 });
+userSchema.index({ role: 1, isActive: 1 }); // For admin queries
 
 const User = mongoose.model('User', userSchema);
 

@@ -54,6 +54,22 @@ const storySchema = new mongoose.Schema({
     default: true,
     index: true,
   },
+  isRemoved: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+  removedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  removedAt: {
+    type: Date
+  },
+  removalReason: {
+    type: String,
+    trim: true
+  },
   musicUrl: {
     type: String,
     trim: true,
@@ -90,6 +106,7 @@ storySchema.index({ user: 1, createdAt: -1 });
 storySchema.index({ expiresAt: 1, isActive: 1 });
 storySchema.index({ privacy: 1, isActive: 1 });
 storySchema.index({ createdAt: -1 });
+storySchema.index({ isRemoved: 1, createdAt: -1 });
 
 // Virtual for checking if story is expired
 storySchema.virtual('isExpired').get(function() {

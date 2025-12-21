@@ -3,6 +3,188 @@ import User from '../models/User.js';
 import { validationResult } from 'express-validator';
 import { createNotification } from './notificationController.js';
 
+// Get users near you based on location
+export const getUsersNearYou = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { limit = 20 } = req.query;
+
+    // Get current user with address
+    const currentUser = await User.findById(userId).select('address').lean();
+    
+    if (!currentUser || !currentUser.address) {
+      return res.status(200).json({
+        success: true,
+        message: 'Please update your address in profile to discover people near you',
+        data: []
+      });
+    }
+
+    const userAddress = currentUser.address;
+    if (!userAddress.district && !userAddress.state && !userAddress.country && !userAddress.pinCode) {
+      return res.status(200).json({
+        success: true,
+        message: 'Please update your address in profile to discover people near you',
+        data: []
+      });
+    }
+
+    // Get current user's friends (accepted requests) - optimized with lean()
+    const userFriends = await FriendRequest.find({
+      $or: [
+        { fromUser: userId, status: 'accepted' },
+        { toUser: userId, status: 'accepted' }
+      ]
+    }).select('fromUser toUser').lean();
+
+    const friendIds = new Set();
+    friendIds.add(userId.toString()); // Add self
+    userFriends.forEach(fr => {
+      if (fr.fromUser.toString() === userId.toString()) {
+        friendIds.add(fr.toUser.toString());
+      } else {
+        friendIds.add(fr.fromUser.toString());
+      }
+    });
+
+    // Get pending requests (sent or received) - optimized with lean()
+    const pendingRequests = await FriendRequest.find({
+      $or: [
+        { fromUser: userId, status: 'pending' },
+        { toUser: userId, status: 'pending' }
+      ]
+    }).select('fromUser toUser').lean();
+
+    const pendingIds = new Set();
+    pendingRequests.forEach(fr => {
+      if (fr.fromUser.toString() === userId.toString()) {
+        pendingIds.add(fr.toUser.toString());
+      } else {
+        pendingIds.add(fr.fromUser.toString());
+      }
+    });
+
+    // Get following (one-way + mutual follows for public accounts)
+    const following = await FriendRequest.find({
+      fromUser: userId,
+      $or: [
+        { status: 'following' },
+        { status: 'accepted' }
+      ]
+    }).select('toUser').lean();
+
+    const followingIds = new Set();
+    following.forEach(fr => {
+      followingIds.add(fr.toUser.toString());
+    });
+
+    // Get all excluded IDs (friends + pending + following + self)
+    const excludedIds = [...friendIds, ...pendingIds, ...followingIds];
+
+    // Build location query - prioritize by proximity
+    const locationQuery = {
+      _id: { $nin: excludedIds },
+      role: 'user',
+      isActive: true,
+      address: { $exists: true, $ne: null }
+    };
+
+    // Build location conditions with priority
+    const locationConditions = [];
+    
+    // Priority 1: Same pinCode
+    if (userAddress.pinCode) {
+      locationConditions.push({
+        'address.pinCode': userAddress.pinCode.trim()
+      });
+    }
+    
+    // Priority 2: Same district
+    if (userAddress.district) {
+      locationConditions.push({
+        'address.district': { $regex: new RegExp(`^${userAddress.district.trim()}$`, 'i') }
+      });
+    }
+    
+    // Priority 3: Same state
+    if (userAddress.state) {
+      locationConditions.push({
+        'address.state': { $regex: new RegExp(`^${userAddress.state.trim()}$`, 'i') }
+      });
+    }
+    
+    // Priority 4: Same country
+    if (userAddress.country) {
+      locationConditions.push({
+        'address.country': { $regex: new RegExp(`^${userAddress.country.trim()}$`, 'i') }
+      });
+    }
+
+    if (locationConditions.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'Please update your address in profile to discover people near you',
+        data: []
+      });
+    }
+
+    locationQuery.$or = locationConditions;
+
+    // Find users near you
+    const nearbyUsers = await User.find(locationQuery)
+      .select('name email profileImage accountType onlineStatus lastSeen privacySettings subscription address')
+      .limit(parseInt(limit) * 2) // Get more to sort by priority
+      .lean();
+
+    // Sort by proximity priority
+    const sortedUsers = nearbyUsers.sort((a, b) => {
+      const aAddress = a.address || {};
+      const bAddress = b.address || {};
+      
+      // Priority scoring: higher score = closer
+      let aScore = 0;
+      let bScore = 0;
+      
+      // Same pinCode = 4 points
+      if (userAddress.pinCode && aAddress.pinCode && 
+          aAddress.pinCode.trim().toLowerCase() === userAddress.pinCode.trim().toLowerCase()) aScore += 4;
+      if (userAddress.pinCode && bAddress.pinCode && 
+          bAddress.pinCode.trim().toLowerCase() === userAddress.pinCode.trim().toLowerCase()) bScore += 4;
+      
+      // Same district = 3 points
+      if (userAddress.district && aAddress.district && 
+          aAddress.district.trim().toLowerCase() === userAddress.district.trim().toLowerCase()) aScore += 3;
+      if (userAddress.district && bAddress.district && 
+          bAddress.district.trim().toLowerCase() === userAddress.district.trim().toLowerCase()) bScore += 3;
+      
+      // Same state = 2 points
+      if (userAddress.state && aAddress.state && 
+          aAddress.state.trim().toLowerCase() === userAddress.state.trim().toLowerCase()) aScore += 2;
+      if (userAddress.state && bAddress.state && 
+          bAddress.state.trim().toLowerCase() === userAddress.state.trim().toLowerCase()) bScore += 2;
+      
+      // Same country = 1 point
+      if (userAddress.country && aAddress.country && 
+          aAddress.country.trim().toLowerCase() === userAddress.country.trim().toLowerCase()) aScore += 1;
+      if (userAddress.country && bAddress.country && 
+          bAddress.country.trim().toLowerCase() === userAddress.country.trim().toLowerCase()) bScore += 1;
+      
+      return bScore - aScore; // Sort descending
+    }).slice(0, parseInt(limit)); // Limit to requested amount
+
+    res.status(200).json({
+      success: true,
+      data: sortedUsers
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch users near you',
+      error: error.message
+    });
+  }
+};
+
 // Get user suggestions (show both public and private accounts)
 export const getUserSuggestions = async (req, res) => {
   try {

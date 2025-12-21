@@ -1,6 +1,7 @@
 import Story from '../models/Story.js';
 import StoryInteraction from '../models/StoryInteraction.js';
 import User from '../models/User.js';
+import { createNotification } from './notificationController.js';
 import mongoose from 'mongoose';
 
 // Get all stories (admin)
@@ -151,7 +152,99 @@ export const getStoryById = async (req, res) => {
   }
 };
 
-// Delete a story (admin)
+// Remove story (admin) - violates policy
+export const removeStory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason, warnUser = true } = req.body;
+    const adminId = req.user._id;
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Removal reason must be at least 10 characters'
+      });
+    }
+
+    const story = await Story.findById(id).populate('user');
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story not found'
+      });
+    }
+
+    if (story.isRemoved) {
+      return res.status(400).json({
+        success: false,
+        message: 'Story is already removed'
+      });
+    }
+
+    const author = await User.findById(story.user._id || story.user);
+    if (!author) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story author not found'
+      });
+    }
+
+    // Mark story as removed
+    story.isRemoved = true;
+    story.isActive = false;
+    story.removedBy = adminId;
+    story.removedAt = new Date();
+    story.removalReason = reason.trim();
+    await story.save();
+
+    // Add warning to user if requested
+    if (warnUser) {
+      if (!author.warnings) {
+        author.warnings = [];
+      }
+      
+      author.warnings.push({
+        type: 'story',
+        reason: reason.trim(),
+        contentId: story._id,
+        contentType: 'Story',
+        warnedBy: adminId,
+        warnedAt: new Date()
+      });
+
+      await author.save();
+
+      // Create notification for user
+      await createNotification(
+        author._id,
+        'message',
+        '⚠️ Story Removed - Policy Violation',
+        `Your story has been removed for violating our community guidelines.\n\nReason: ${reason.trim()}\n\nPlease review our community policies to avoid future violations. Repeated violations may result in account restrictions.`,
+        null,
+        null,
+        '/user/stories'
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Story removed successfully',
+      data: {
+        storyId: story._id,
+        warned: warnUser
+      }
+    });
+  } catch (error) {
+    console.error('[Admin Story Controller] Error removing story:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to remove story',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+// Delete a story (admin) - legacy support
 export const deleteStory = async (req, res) => {
   try {
     const { id } = req.params;
@@ -165,6 +258,7 @@ export const deleteStory = async (req, res) => {
     }
 
     story.isActive = false;
+    story.isRemoved = true;
     await story.save();
 
     res.status(200).json({

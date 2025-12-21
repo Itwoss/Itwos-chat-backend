@@ -4,6 +4,7 @@ import {
   getStoryById,
   getStoryStats,
   deleteStory,
+  removeStory,
   blockUserFromStories,
   getStoryInteractions,
 } from '../controllers/adminStoryController.js';
@@ -19,6 +20,7 @@ router.use(authorize('admin'));
 router.get('/', getAllStories);
 router.get('/stats', getStoryStats);
 router.get('/:id', getStoryById);
+router.post('/:id/remove', removeStory);
 router.delete('/:id', deleteStory);
 router.post('/:userId/block', blockUserFromStories);
 router.get('/:id/interactions', getStoryInteractions);
