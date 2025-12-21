@@ -84,3 +84,4 @@ export const getPaymentDetails = async (paymentId) => {
 export default getRazorpayInstance;
 
 
+
