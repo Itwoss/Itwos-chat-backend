@@ -39,6 +39,18 @@ const updateProfileValidation = [
 
 // Routes
 router.post('/login', loginValidation, loginAdmin);
+// Test endpoint to check cookies
+router.get('/test-cookies', (req, res) => {
+  res.json({
+    success: true,
+    cookies: req.cookies,
+    adminToken: !!req.cookies.adminToken,
+    userToken: !!req.cookies.userToken,
+    headers: {
+      cookie: req.headers.cookie
+    }
+  });
+});
 router.get('/me', authenticate, authorize('admin'), getCurrentAdmin);
 router.get('/stats', authenticate, authorize('admin'), getAdminStats);
 router.post('/logout', authenticate, authorize('admin'), logoutAdmin);

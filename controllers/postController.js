@@ -69,9 +69,9 @@ export const createPost = async (req, res) => {
     });
 
     const populatedPost = await Post.findById(post._id)
-      .populate('author', 'name email profileImage accountType')
-      .populate('likes', 'name profileImage')
-      .populate('comments.user', 'name profileImage');
+      .populate('author', 'name email profileImage accountType subscription')
+      .populate('likes', 'name profileImage subscription')
+      .populate('comments.user', 'name profileImage subscription');
 
     res.status(201).json({
       success: true,
@@ -129,9 +129,9 @@ export const getFeed = async (req, res) => {
     };
 
     const posts = await Post.find(query)
-      .populate('author', 'name email profileImage accountType')
-      .populate('likes', 'name profileImage')
-      .populate('comments.user', 'name profileImage')
+      .populate('author', 'name email profileImage accountType subscription')
+      .populate('likes', 'name profileImage subscription')
+      .populate('comments.user', 'name profileImage subscription')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -246,9 +246,9 @@ export const getUserPosts = async (req, res) => {
     const query = { author: userId, isArchived: false };
     
     const posts = await Post.find(query)
-      .populate('author', 'name email profileImage accountType')
-      .populate('likes', 'name profileImage')
-      .populate('comments.user', 'name profileImage')
+      .populate('author', 'name email profileImage accountType subscription')
+      .populate('likes', 'name profileImage subscription')
+      .populate('comments.user', 'name profileImage subscription')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -301,9 +301,9 @@ export const toggleLike = async (req, res) => {
     await post.save();
 
     const updatedPost = await Post.findById(postId)
-      .populate('author', 'name email profileImage accountType')
-      .populate('likes', 'name profileImage')
-      .populate('comments.user', 'name profileImage');
+      .populate('author', 'name email profileImage accountType subscription')
+      .populate('likes', 'name profileImage subscription')
+      .populate('comments.user', 'name profileImage subscription');
 
     res.status(200).json({
       success: true,
@@ -358,9 +358,9 @@ export const addComment = async (req, res) => {
     await post.save();
 
     const updatedPost = await Post.findById(postId)
-      .populate('author', 'name email profileImage accountType')
-      .populate('likes', 'name profileImage')
-      .populate('comments.user', 'name profileImage');
+      .populate('author', 'name email profileImage accountType subscription')
+      .populate('likes', 'name profileImage subscription')
+      .populate('comments.user', 'name profileImage subscription');
 
     res.status(200).json({
       success: true,

@@ -67,7 +67,7 @@ export const getUserSuggestions = async (req, res) => {
       role: 'user',
       isActive: true
     })
-      .select('name email profileImage accountType onlineStatus lastSeen privacySettings')
+      .select('name email profileImage accountType onlineStatus lastSeen privacySettings subscription')
       .limit(parseInt(limit))
       .sort({ createdAt: -1 })
       .lean(); // Use lean() for faster queries
@@ -379,8 +379,8 @@ export const getUserFriends = async (req, res) => {
         { toUser: userId, status: 'accepted' }
       ]
     })
-      .populate('fromUser', 'name email profileImage accountType onlineStatus lastSeen')
-      .populate('toUser', 'name email profileImage accountType onlineStatus lastSeen')
+      .populate('fromUser', 'name email profileImage accountType onlineStatus lastSeen subscription')
+      .populate('toUser', 'name email profileImage accountType onlineStatus lastSeen subscription')
       .sort({ updatedAt: -1 })
       .lean();
 
@@ -410,6 +410,10 @@ export const getUserFriends = async (req, res) => {
           privacySettings: friend.privacySettings || {
             hideLastSeen: false,
             hideOnlineStatus: false
+          },
+          subscription: friend.subscription || {
+            badgeType: null,
+            subscriptionId: null
           },
           friendshipId: fr._id
         });
@@ -656,7 +660,7 @@ export const getFollowers = async (req, res) => {
       status: 'following'
     })
       .select('fromUser createdAt')
-      .populate('fromUser', 'name email profileImage accountType onlineStatus lastSeen')
+      .populate('fromUser', 'name email profileImage accountType onlineStatus lastSeen subscription')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -666,7 +670,7 @@ export const getFollowers = async (req, res) => {
       status: 'accepted'
     })
       .select('fromUser createdAt')
-      .populate('fromUser', 'name email profileImage accountType onlineStatus lastSeen')
+      .populate('fromUser', 'name email profileImage accountType onlineStatus lastSeen subscription')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -679,6 +683,10 @@ export const getFollowers = async (req, res) => {
       accountType: f.fromUser.accountType,
       onlineStatus: f.fromUser.onlineStatus,
       lastSeen: f.fromUser.lastSeen,
+      subscription: f.fromUser.subscription || {
+        badgeType: null,
+        subscriptionId: null
+      },
       followedAt: f.createdAt,
       isFriend: f.status === 'accepted'
     }));
@@ -719,7 +727,7 @@ export const getFollowing = async (req, res) => {
       status: 'following'
     })
       .select('toUser createdAt')
-      .populate('toUser', 'name email profileImage accountType onlineStatus lastSeen')
+      .populate('toUser', 'name email profileImage accountType onlineStatus lastSeen subscription')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -729,7 +737,7 @@ export const getFollowing = async (req, res) => {
       status: 'accepted'
     })
       .select('toUser createdAt')
-      .populate('toUser', 'name email profileImage accountType onlineStatus lastSeen')
+      .populate('toUser', 'name email profileImage accountType onlineStatus lastSeen subscription')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -742,6 +750,10 @@ export const getFollowing = async (req, res) => {
       accountType: f.toUser.accountType,
       onlineStatus: f.toUser.onlineStatus,
       lastSeen: f.toUser.lastSeen,
+      subscription: f.toUser.subscription || {
+        badgeType: null,
+        subscriptionId: null
+      },
       followedAt: f.createdAt,
       isFriend: f.status === 'accepted'
     }));

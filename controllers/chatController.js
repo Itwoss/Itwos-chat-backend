@@ -51,7 +51,7 @@ export const getOrCreateChat = async (req, res) => {
       participants: { $all: [currentUserId, userId] }
     })
       .populate('lastMessage')
-      .populate('participants', 'name email profileImage accountType onlineStatus lastSeen privacySettings')
+      .populate('participants', 'name email profileImage accountType onlineStatus lastSeen privacySettings subscription')
       .lean();
 
     if (!chat) {
@@ -62,7 +62,7 @@ export const getOrCreateChat = async (req, res) => {
       
       // Populate after creation
       chat = await Chat.findById(newChat._id)
-        .populate('participants', 'name email profileImage accountType onlineStatus lastSeen privacySettings')
+        .populate('participants', 'name email profileImage accountType onlineStatus lastSeen privacySettings subscription')
         .lean();
     }
 
@@ -139,7 +139,8 @@ export const getUserChats = async (req, res) => {
             accountType: '$participants.accountType',
             onlineStatus: '$participants.onlineStatus',
             lastSeen: '$participants.lastSeen',
-            privacySettings: '$participants.privacySettings'
+            privacySettings: '$participants.privacySettings',
+            subscription: '$participants.subscription'
           },
           lastMessage: 1,
           lastMessageAt: 1

@@ -70,6 +70,30 @@ const userSchema = new mongoose.Schema({
       type: Boolean,
       default: false
     }
+  },
+  subscription: {
+    badgeType: {
+      type: String,
+      enum: ['blue', 'yellow', 'pink'],
+      default: null,
+      required: false
+    },
+    subscriptionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Subscription',
+      default: null,
+      required: false
+    }
+  },
+  bannerInventory: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Banner',
+    default: []
+  }],
+  equippedBanner: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Banner',
+    default: null
   }
 }, {
   timestamps: true

@@ -4,6 +4,14 @@ import User from '../models/User.js';
 // Get user notifications
 export const getUserNotifications = async (req, res) => {
   try {
+    if (!req.user || !req.user._id) {
+      console.error('[Notification Controller] No user in request');
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
     const userId = req.user._id;
     const { page = 1, limit = 20, unreadOnly = false } = req.query;
 
@@ -34,10 +42,11 @@ export const getUserNotifications = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('[Notification Controller] Error fetching notifications:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch notifications',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };

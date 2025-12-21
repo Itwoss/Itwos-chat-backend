@@ -244,11 +244,13 @@ export const registerUser = async (req, res) => {
     const token = generateToken(user._id);
 
     // Set cookie with role-based name
+    // Use 'lax' for same-site requests, works with localhost and IP if same origin
     res.cookie('userToken', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      sameSite: 'lax', // Works for same-site and top-level navigations
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      // Don't set domain to allow both localhost and IP addresses
     });
 
     const userResponse = await User.findById(user._id).select('-password');
@@ -322,18 +324,43 @@ export const loginUser = async (req, res) => {
       });
     }
 
+    // Check if JWT_SECRET is configured
+    if (!process.env.JWT_SECRET) {
+      console.error('JWT_SECRET is not configured in environment variables');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error. Please contact administrator.'
+      });
+    }
+
     // Generate token
     const token = generateToken(user._id);
 
     // Set cookie with role-based name
+    // Use 'lax' for same-site requests, works with localhost and IP if same origin
     res.cookie('userToken', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      sameSite: 'lax', // Works for same-site and top-level navigations
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      // Don't set domain to allow both localhost and IP addresses
     });
 
-    const userResponse = await User.findById(user._id).select('-password');
+    const userResponse = await User.findById(user._id).select('-password').lean();
+
+    if (!userResponse) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error retrieving user data'
+      });
+    }
+
+    // Safely handle subscription field
+    const subscription = userResponse.subscription || {};
+    const subscriptionData = {
+      badgeType: subscription.badgeType || null,
+      subscriptionId: subscription.subscriptionId || null
+    };
 
     res.status(200).json({
       success: true,
@@ -351,15 +378,17 @@ export const loginUser = async (req, res) => {
         accountType: userResponse.accountType || 'public',
         onlineStatus: userResponse.onlineStatus || 'offline',
         lastSeen: userResponse.lastSeen,
+        subscription: subscriptionData,
         createdAt: userResponse.createdAt,
         updatedAt: userResponse.updatedAt
       }
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({
       success: false,
       message: 'Login failed',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'An error occurred during login'
     });
   }
 };
@@ -367,9 +396,18 @@ export const loginUser = async (req, res) => {
 // Get current user
 export const getCurrentUser = async (req, res) => {
   try {
+    if (!req.user || !req.user._id) {
+      console.error('[User Controller] No user in request');
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
     const user = await User.findById(req.user._id).select('-password');
     
     if (!user) {
+      console.error('[User Controller] User not found:', req.user._id);
       return res.status(404).json({
         success: false,
         message: 'User not found'
@@ -394,6 +432,13 @@ export const getCurrentUser = async (req, res) => {
       (await import('../models/ClientProject.js')).default.countDocuments({ client: user._id })
     ]);
 
+    // Safely handle subscription field
+    const subscription = user.subscription || {};
+    const subscriptionData = {
+      badgeType: subscription.badgeType || null,
+      subscriptionId: subscription.subscriptionId || null
+    };
+
     res.status(200).json({
       success: true,
       data: {
@@ -413,6 +458,7 @@ export const getCurrentUser = async (req, res) => {
           hideLastSeen: false,
           hideOnlineStatus: false
         },
+        subscription: subscriptionData,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
         stats: {
@@ -424,10 +470,11 @@ export const getCurrentUser = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('[User Controller] Error in getCurrentUser:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to get user',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
@@ -435,7 +482,11 @@ export const getCurrentUser = async (req, res) => {
 // Logout user
 export const logoutUser = async (req, res) => {
   try {
-    res.clearCookie('userToken');
+    res.clearCookie('userToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    });
     res.status(200).json({
       success: true,
       message: 'Logged out successfully'

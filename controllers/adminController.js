@@ -17,6 +17,7 @@ export const loginAdmin = async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.error('[Admin Login] Validation errors:', errors.array());
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -26,9 +27,27 @@ export const loginAdmin = async (req, res) => {
 
     const { email, password } = req.body;
 
-    // Find admin user
-    const admin = await User.findOne({ email, role: 'admin' });
+    if (!email || !password) {
+      console.error('[Admin Login] Missing email or password');
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
+    }
+
+    // Normalize email (lowercase and trim)
+    const normalizedEmail = email.toLowerCase().trim();
+
+    console.log('[Admin Login] Attempting login for:', normalizedEmail);
+
+    // Find admin user - try both normalized and original email
+    let admin = await User.findOne({ email: normalizedEmail, role: 'admin' });
     if (!admin) {
+      admin = await User.findOne({ email: email.trim(), role: 'admin' });
+    }
+    
+    if (!admin) {
+      console.error('[Admin Login] Admin not found:', normalizedEmail);
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password'
@@ -46,22 +65,46 @@ export const loginAdmin = async (req, res) => {
     // Check password
     const isPasswordValid = await bcrypt.compare(password, admin.password);
     if (!isPasswordValid) {
+      console.error('[Admin Login] Invalid password for:', normalizedEmail);
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password'
       });
     }
 
+    // Check JWT_SECRET
+    if (!process.env.JWT_SECRET) {
+      console.error('[Admin Login] JWT_SECRET is not set');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error'
+      });
+    }
+
     // Generate token
     const token = generateToken(admin._id);
+    if (!token) {
+      console.error('[Admin Login] Failed to generate token');
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to generate authentication token'
+      });
+    }
+
+    console.log('[Admin Login] Login successful for:', normalizedEmail);
 
     // Set cookie with role-based name
+    // Use 'lax' for same-site requests, works with localhost and IP if same origin
     res.cookie('adminToken', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      sameSite: 'lax', // Works for same-site and top-level navigations
+      path: '/', // Make cookie available for all routes
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      // Don't set domain to allow both localhost and IP addresses
     });
+    
+    console.log('[Admin Login] Cookie set: adminToken (length:', token.length, ')');
 
     const adminResponse = await User.findById(admin._id).select('-password');
 
@@ -83,10 +126,11 @@ export const loginAdmin = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('[Admin Login] Error:', error);
     res.status(500).json({
       success: false,
       message: 'Login failed',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'An error occurred during login'
     });
   }
 };
@@ -150,7 +194,11 @@ export const getCurrentAdmin = async (req, res) => {
 // Logout admin
 export const logoutAdmin = async (req, res) => {
   try {
-    res.clearCookie('adminToken');
+    res.clearCookie('adminToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    });
     res.status(200).json({
       success: true,
       message: 'Logged out successfully'

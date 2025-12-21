@@ -25,16 +25,21 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit for chat files
+    fileSize: 100 * 1024 * 1024, // 100MB limit (for videos)
   },
   fileFilter: (req, file, cb) => {
-    // Accept images, audio files, and common file types
+    // Accept images, videos, audio files, and common file types
     const allowedMimes = [
       'image/jpeg',
       'image/jpg',
       'image/png',
       'image/gif',
       'image/webp',
+      'video/mp4',
+      'video/mpeg',
+      'video/quicktime',
+      'video/x-msvideo',
+      'video/webm',
       'audio/mpeg',
       'audio/mp3',
       'audio/wav',
@@ -54,13 +59,17 @@ const upload = multer({
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Invalid file type. Only images and documents are allowed.'), false);
+      cb(new Error('Invalid file type. Only images, videos, and documents are allowed.'), false);
     }
   },
 });
 
 export const uploadSingle = upload.single('file');
 export const uploadMultiple = upload.array('files', 10); // Max 10 files
+export const uploadFields = upload.fields([
+  { name: 'file', maxCount: 1 }, // Media file (image/video)
+  { name: 'musicFile', maxCount: 1 }, // Music file (optional)
+]);
 
 export default upload;
 
