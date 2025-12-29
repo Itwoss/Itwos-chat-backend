@@ -10,7 +10,7 @@ import fs from 'fs';
 export const createStory = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { caption, privacy, musicStartTime, musicEndTime, location, taggedUsers } = req.body;
+    const { caption, privacy, musicStartTime, musicEndTime, location, taggedUsers, sound } = req.body;
 
     let mediaUrl = req.body.mediaUrl;
     let mediaType = req.body.mediaType;
@@ -70,6 +70,16 @@ export const createStory = async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + 24);
 
+    // Parse sound metadata if provided
+    let soundData = null;
+    if (sound) {
+      try {
+        soundData = typeof sound === 'string' ? JSON.parse(sound) : sound;
+      } catch (e) {
+        console.error('[Story Controller] Error parsing sound data:', e);
+      }
+    }
+
     const storyData = {
       user: userId,
       mediaUrl,
@@ -82,6 +92,7 @@ export const createStory = async (req, res) => {
       musicEndTime: musicEndTime || null,
       location: location || null,
       taggedUsers: taggedUsers || [],
+      sound: soundData || undefined,
     };
 
     const story = await Story.create(storyData);

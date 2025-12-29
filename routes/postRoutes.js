@@ -22,8 +22,8 @@ router.use(authorize('user'));
 // Validation rules
 const createPostValidation = [
   body('content')
+    .optional()
     .trim()
-    .notEmpty().withMessage('Post content is required')
     .isLength({ max: 2000 }).withMessage('Post content must be less than 2000 characters')
 ];
 

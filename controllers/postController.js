@@ -5,6 +5,7 @@ import { validationResult } from 'express-validator';
 import cloudinary from '../utils/cloudinary.js';
 import fs from 'fs';
 import mongoose from 'mongoose';
+import { addCount } from '../services/countService.js';
 
 // Create a new post
 export const createPost = async (req, res) => {
@@ -19,13 +20,17 @@ export const createPost = async (req, res) => {
     }
 
     const userId = req.user._id;
-    const { content } = req.body;
+    const { content, sound } = req.body;
     const files = req.files || [];
 
-    if (!content || content.trim().length === 0) {
+    // Allow posts with content, images, or song (at least one must be present)
+    const hasContent = content && content.trim().length > 0;
+    const hasFiles = files && files.length > 0;
+
+    if (!hasContent && !hasFiles) {
       return res.status(400).json({
         success: false,
-        message: 'Post content is required'
+        message: 'Post must have content, images, or a song'
       });
     }
 
@@ -61,17 +66,41 @@ export const createPost = async (req, res) => {
       }
     }
 
+    // Parse sound metadata if provided
+    let soundData = null;
+    if (sound) {
+      try {
+        soundData = typeof sound === 'string' ? JSON.parse(sound) : sound;
+      } catch (e) {
+        console.error('[Post Controller] Error parsing sound data:', e);
+      }
+    }
+
     const post = await Post.create({
       author: userId,
-      content: content.trim(),
+      content: hasContent ? content.trim() : '',
       images: imageUrls,
-      song: songUrl
+      song: songUrl,
+      sound: soundData || undefined,
     });
 
     const populatedPost = await Post.findById(post._id)
       .populate('author', 'name email profileImage accountType subscription')
       .populate('likes', 'name profileImage subscription')
       .populate('comments.user', 'name profileImage subscription');
+
+    // Emit real-time notification to admins for new post
+    const io = req.app?.get('io');
+    if (io) {
+      io.to('admin').emit('new-post', {
+        post: populatedPost,
+        message: `New post from ${req.user.name}`
+      });
+      io.to('admin-room').emit('new-post', {
+        post: populatedPost,
+        message: `New post from ${req.user.name}`
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -321,6 +350,17 @@ export const toggleLike = async (req, res) => {
 
     await post.save();
 
+    // Add count for like (only when liking, not unliking)
+    if (!isLiked) {
+      try {
+        await addCount(userId, 'post_like', 1, {
+          postId: postId
+        });
+      } catch (countError) {
+        console.error('[PostController] Error adding count for like:', countError);
+      }
+    }
+
     const updatedPost = await Post.findById(postId)
       .populate('author', 'name email profileImage accountType subscription')
       .populate('likes', 'name profileImage subscription')
@@ -385,6 +425,17 @@ export const addComment = async (req, res) => {
     });
 
     await post.save();
+
+    // Add count for comment
+    try {
+      const newComment = post.comments[post.comments.length - 1];
+      await addCount(userId, 'comment', 1, {
+        postId: postId,
+        commentId: newComment._id
+      });
+    } catch (countError) {
+      console.error('[PostController] Error adding count for comment:', countError);
+    }
 
     const updatedPost = await Post.findById(postId)
       .populate('author', 'name email profileImage accountType subscription')

@@ -155,6 +155,52 @@ const userSchema = new mongoose.Schema({
   blockedReason: {
     type: String,
     trim: true
+  },
+  // Count System Fields
+  currentMonthCount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  monthlyHistory: [{
+    monthYear: {
+      type: String, // Format: "Jan-2025"
+      required: true
+    },
+    count: {
+      type: Number,
+      required: true,
+      min: 0
+    },
+    rank: {
+      type: Number
+    }
+  }],
+  totalCount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  countFrozen: {
+    type: Boolean,
+    default: false
+  },
+  hiddenFromLeaderboard: {
+    type: Boolean,
+    default: false
+  },
+  lastCountReset: {
+    type: Date
+  },
+  // Popularity System
+  isTopChatter: {
+    type: Boolean,
+    default: false
+  },
+  popularityBadge: {
+    type: String,
+    enum: [null, 'bronze', 'silver', 'gold', 'platinum'],
+    default: null
   }
 }, {
   timestamps: true
@@ -171,6 +217,12 @@ userSchema.index({ createdAt: -1 });
 userSchema.index({ onlineStatus: 1, lastSeen: -1 });
 userSchema.index({ 'subscription.badgeType': 1 });
 userSchema.index({ role: 1, isActive: 1 }); // For admin queries
+userSchema.index({ currentMonthCount: -1 }); // For monthly leaderboard
+userSchema.index({ totalCount: -1 }); // For lifetime leaderboard
+userSchema.index({ 'address.country': 1, currentMonthCount: -1 }); // For country leaderboard
+userSchema.index({ 'address.state': 1, currentMonthCount: -1 }); // For state leaderboard
+userSchema.index({ 'address.district': 1, currentMonthCount: -1 }); // For district leaderboard
+userSchema.index({ isTopChatter: 1, hiddenFromLeaderboard: 1 }); // For popularity suggestions
 
 const User = mongoose.model('User', userSchema);
 

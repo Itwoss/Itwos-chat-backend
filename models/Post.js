@@ -36,6 +36,43 @@ const postSchema = new mongoose.Schema({
     type: String, // Cloudinary URL for audio file
     default: null
   },
+  sound: {
+    video_id: {
+      type: String,
+      trim: true,
+    },
+    title: {
+      type: String,
+      trim: true,
+    },
+    artist: {
+      type: String,
+      trim: true,
+    },
+    thumbnail: {
+      type: String,
+      trim: true,
+    },
+    preview_url: {
+      type: String,
+      trim: true,
+    },
+    source: {
+      type: String,
+      enum: ['youtube', 'spotify'],
+      default: 'youtube',
+    },
+    startTime: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    endTime: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+  },
   isArchived: {
     type: Boolean,
     default: false,

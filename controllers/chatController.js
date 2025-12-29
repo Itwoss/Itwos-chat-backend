@@ -5,6 +5,7 @@ import User from '../models/User.js';
 import { validationResult } from 'express-validator';
 import { createNotification } from './notificationController.js';
 import { encryptMessage, decryptMessage } from '../utils/encryption.js';
+import { addCount, hashMessage } from '../services/countService.js';
 
 // Get or create chat between two users
 export const getOrCreateChat = async (req, res) => {
@@ -450,6 +451,23 @@ export const sendMessage = async (req, res) => {
       null,
       `/user/chat/${senderId}`
     );
+
+    // Add count for valid chat message (only text messages, not duplicates)
+    if (messageType === 'text' && content && content.trim()) {
+      try {
+        const messageHash = hashMessage(content);
+        await addCount(senderId, 'chat', 1, {
+          chatId: chatId,
+          messageId: message._id,
+          recipientId: receiverId,
+          messageHash: messageHash,
+          messageText: content
+        });
+      } catch (countError) {
+        // Don't fail the message send if count fails
+        console.error('[ChatController] Error adding count:', countError);
+      }
+    }
 
     res.status(201).json({
       success: true,

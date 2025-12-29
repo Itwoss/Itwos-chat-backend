@@ -28,9 +28,17 @@ import adminBannerRoutes from './routes/adminBannerRoutes.js';
 import storyRoutes from './routes/storyRoutes.js';
 import adminStoryRoutes from './routes/adminStoryRoutes.js';
 import adminPostRoutes from './routes/adminPostRoutes.js';
+import musicRoutes from './routes/musicRoutes.js';
+import countRoutes from './routes/countRoutes.js';
+import leaderboardRoutes from './routes/leaderboardRoutes.js';
+import adminRuleRoutes from './routes/adminRuleRoutes.js';
+import eventRoutes from './routes/eventRoutes.js';
+import abuseRoutes from './routes/abuseRoutes.js';
+import supportRoutes from './routes/supportRoutes.js';
 import { authenticateSocket } from './middleware/socketAuth.js';
 import { startSubscriptionCron } from './utils/subscriptionCron.js';
 import { startStoryCron } from './utils/storyCron.js';
+import { startCountCronJobs } from './utils/countCron.js';
 
 dotenv.config();
 
@@ -61,7 +69,7 @@ const io = new Server(httpServer, {
   cors: corsOptions
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 // Middleware
 app.use(cors(corsOptions));
@@ -98,6 +106,13 @@ app.use('/api/admin/banners', adminBannerRoutes);
 app.use('/api/user/stories', storyRoutes);
 app.use('/api/admin/stories', adminStoryRoutes);
 app.use('/api/admin/posts', adminPostRoutes);
+app.use('/api/music', musicRoutes);
+app.use('/api/count', countRoutes);
+app.use('/api/leaderboard', leaderboardRoutes);
+app.use('/api/admin/rules', adminRuleRoutes);
+app.use('/api/events', eventRoutes);
+app.use('/api/admin/abuse', abuseRoutes);
+app.use('/api/support', supportRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -161,8 +176,13 @@ io.on('connection', async (socket) => {
 
       // Check if user is admin and join admin room
       if (user.role === 'admin') {
-        socket.join('admin-room');
+        socket.join('admin');
+        socket.join('admin-room'); // Keep for backward compatibility
+        console.log(`Admin connected: ${userId}`);
       }
+      
+      // Join user-specific room for support notifications
+      socket.join(`user-${userId}`);
     }
   } catch (error) {
     console.error('Error updating user status:', error);
@@ -313,6 +333,9 @@ const emitToAdminRoom = (notification) => {
   io.to('admin-room').emit('new-notification', notification);
 };
 
+// Make io available to controllers via app
+app.set('io', io);
+
 // Export io and helper functions for use in controllers
 export { io, emitNotification, emitToAdminRoom };
 
@@ -324,5 +347,6 @@ httpServer.listen(PORT, () => {
   // Start cron jobs
   startSubscriptionCron();
   startStoryCron();
+  startCountCronJobs();
 });
 
