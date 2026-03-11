@@ -1,0 +1,71 @@
+name: itwos-chat-backend
+services:
+  - name: backend
+    github:
+      repo: Itwoss/Itwos-chat-backend
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    build_command: npm install
+    run_command: node server.js
+    environment_slug: node-js
+    instance_count: 1
+    instance_size_slug: basic-xxs  # Adjust based on your needs (basic-xxs, basic-xs, basic-s, etc.)
+    http_port: 5001
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    routes:
+      - path: /
+    # CRITICAL: Environment variables for backend
+    # These are available at RUN_TIME (unlike frontend which needs BUILD_TIME)
+    envs:
+      - key: PORT
+        value: "5001"
+        scope: RUN_TIME
+      - key: NODE_ENV
+        value: "production"
+        scope: RUN_TIME  # CRITICAL: Must be 'production' for cookies to work
+      - key: FRONTEND_URL
+        value: "https://app.itwos.store"
+        scope: RUN_TIME
+      - key: BACKEND_URL
+        value: "https://api.itwos.store"
+        scope: RUN_TIME
+      - key: MONGODB_URI
+        value: "mongodb+srv://itwos-admin:Ry19e2CUXEsnYGqa@itwos.ggpbl8w.mongodb.net/?appName=itwos"
+        scope: RUN_TIME
+      - key: APP_NAME
+        value: "itwos"
+        scope: RUN_TIME
+      - key: JWT_SECRET
+        value: "SANJAY"
+        scope: RUN_TIME
+      - key: JWT_EXPIRE
+        value: "7d"
+        scope: RUN_TIME
+      - key: CLOUDINARY_CLOUD_NAME
+        value: "de4rcngsb"
+        scope: RUN_TIME
+      - key: CLOUDINARY_API_KEY
+        value: "221928821541838"
+        scope: RUN_TIME
+      - key: CLOUDINARY_API_SECRET
+        value: "yE0v8DR7nBH5g0mvz-MdmmgvZ4k"
+        scope: RUN_TIME
+      - key: ENCRYPTION_KEY
+        value: "f361e7c884fd786054d28421402a34172c7a587a1aacd3c53bb657bc94bb8b8b"
+        scope: RUN_TIME
+      - key: RAZORPAY_KEY_ID
+        value: "rzp_live_RUuZIGTpYBor0z"
+        scope: RUN_TIME
+      - key: RAZORPAY_KEY_SECRET
+        value: "f8bwUguOepMGv3to3UTqSoXD"
+        scope: RUN_TIME
+      - key: YOUTUBE_API_KEY
+        value: "AIzaSyC5Pzthk7ipIY-jiLLOdZftcHJrEyxDpVY"
+        scope: RUN_TIME

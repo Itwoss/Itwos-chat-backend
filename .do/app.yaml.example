@@ -1,0 +1,71 @@
+name: itwos-chat-backend
+services:
+  - name: backend
+    github:
+      repo: Itwoss/Itwos-chat-backend
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    build_command: npm install
+    run_command: node server.js
+    environment_slug: node-js
+    instance_count: 1
+    instance_size_slug: basic-xxs  # Options: basic-xxs, basic-xs, basic-s, basic-m, professional-xs, etc.
+    http_port: 5001
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    routes:
+      - path: /
+    # Environment variables - Set these in Digital Ocean Dashboard
+    # DO NOT commit actual secrets to git - use .do/app.yaml.example as template
+    envs:
+      - key: PORT
+        value: "5001"
+        scope: RUN_TIME
+      - key: NODE_ENV
+        value: "production"  # CRITICAL: Must be 'production' for cookies to work with iOS
+        scope: RUN_TIME
+      - key: FRONTEND_URL
+        value: "https://seahorse-app-6oovh.ondigitalocean.app"
+        scope: RUN_TIME
+      - key: BACKEND_URL
+        value: "https://plankton-app-ymi7p.ondigitalocean.app"
+        scope: RUN_TIME
+      - key: MONGODB_URI
+        value: "your_mongodb_connection_string"
+        scope: RUN_TIME
+      - key: APP_NAME
+        value: "itwos"
+        scope: RUN_TIME
+      - key: JWT_SECRET
+        value: "your_jwt_secret_key"
+        scope: RUN_TIME
+      - key: JWT_EXPIRE
+        value: "7d"
+        scope: RUN_TIME
+      - key: CLOUDINARY_CLOUD_NAME
+        value: "your_cloudinary_cloud_name"
+        scope: RUN_TIME
+      - key: CLOUDINARY_API_KEY
+        value: "your_cloudinary_api_key"
+        scope: RUN_TIME
+      - key: CLOUDINARY_API_SECRET
+        value: "your_cloudinary_api_secret"
+        scope: RUN_TIME
+      - key: ENCRYPTION_KEY
+        value: "your_encryption_key"
+        scope: RUN_TIME
+      - key: RAZORPAY_KEY_ID
+        value: "your_razorpay_key_id"
+        scope: RUN_TIME
+      - key: RAZORPAY_KEY_SECRET
+        value: "your_razorpay_key_secret"
+        scope: RUN_TIME
+      - key: YOUTUBE_API_KEY
+        value: "your_youtube_api_key"
+        scope: RUN_TIME

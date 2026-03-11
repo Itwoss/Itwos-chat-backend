@@ -1,0 +1,561 @@
+import Story from '../models/Story.js';
+import StoryInteraction from '../models/StoryInteraction.js';
+import FriendRequest from '../models/FriendRequest.js';
+import mongoose from 'mongoose';
+import cloudinary from '../utils/cloudinary.js';
+import fs from 'fs';
+
+// Create a new story
+export const createStory = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { caption, privacy, musicStartTime, musicEndTime, location, taggedUsers, sound, videoVolume, musicVolume } = req.body;
+
+    let mediaUrl = req.body.mediaUrl;
+    let mediaType = req.body.mediaType;
+    let musicUrl = req.body.musicUrl;
+
+    // Handle media file upload if file is provided
+    const mediaFile = req.files?.file?.[0];
+    if (mediaFile) {
+      try {
+        const isVideo = mediaFile.mimetype.startsWith('video/');
+        const result = await cloudinary.uploader.upload(mediaFile.path, {
+          folder: 'chat-app/stories',
+          resource_type: isVideo ? 'video' : 'image',
+        });
+        mediaUrl = result.secure_url;
+        mediaType = isVideo ? 'video' : 'image';
+        fs.unlinkSync(mediaFile.path); // Delete temporary file
+      } catch (uploadError) {
+        console.error('[Story Controller] Cloudinary upload error:', uploadError);
+        if (mediaFile && mediaFile.path) {
+          fs.unlinkSync(mediaFile.path); // Clean up temp file
+        }
+        return res.status(500).json({
+          success: false,
+          message: 'Media upload failed',
+        });
+      }
+    }
+
+    if (!mediaUrl || !mediaType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Media URL and type are required',
+      });
+    }
+
+    // Handle music file upload if provided
+    const musicFile = req.files?.musicFile?.[0];
+    if (musicFile) {
+      try {
+        const result = await cloudinary.uploader.upload(musicFile.path, {
+          folder: 'chat-app/stories/music',
+          resource_type: 'video', // Cloudinary uses 'video' for audio
+        });
+        musicUrl = result.secure_url;
+        fs.unlinkSync(musicFile.path); // Delete temporary file
+      } catch (uploadError) {
+        console.error('[Story Controller] Music upload error:', uploadError);
+        if (musicFile && musicFile.path) {
+          fs.unlinkSync(musicFile.path); // Clean up temp file
+        }
+        // Don't fail the story creation if music upload fails
+      }
+    }
+
+    // Calculate expiry date (24 hours from now)
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24);
+
+    // Parse sound metadata if provided
+    let soundData = null;
+    if (sound) {
+      try {
+        soundData = typeof sound === 'string' ? JSON.parse(sound) : sound;
+      } catch (e) {
+        console.error('[Story Controller] Error parsing sound data:', e);
+      }
+    }
+
+    const storyData = {
+      user: userId,
+      mediaUrl,
+      mediaType,
+      caption: caption || '',
+      privacy: privacy || 'public',
+      expiresAt,
+      musicUrl: musicUrl || null,
+      musicStartTime: musicStartTime || 0,
+      musicEndTime: musicEndTime || null,
+      location: location || null,
+      taggedUsers: taggedUsers || [],
+      sound: soundData || undefined,
+      videoVolume: (videoVolume != null && videoVolume !== '') ? Math.max(0, Math.min(1, Number(videoVolume))) : 1,
+      musicVolume: (musicVolume != null && musicVolume !== '') ? Math.max(0, Math.min(1, Number(musicVolume))) : 1,
+    };
+
+    const story = await Story.create(storyData);
+
+    // Populate user data
+    await story.populate('user', 'name email profileImage');
+
+    res.status(201).json({
+      success: true,
+      message: 'Story created successfully',
+      data: story,
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error creating story:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create story',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
+// Helper: group stories by user, add hasViewed, sort (unviewed first, then by latest)
+async function groupStoriesByUserAndSort(stories, currentUserId) {
+  if (!stories || stories.length === 0) return [];
+  const storiesByUser = {};
+  stories.forEach(story => {
+    const ownerId = story.user?._id?.toString() || story.user?.toString();
+    if (!ownerId) return;
+    if (!storiesByUser[ownerId]) {
+      storiesByUser[ownerId] = { user: story.user, stories: [], hasViewed: false };
+    }
+    storiesByUser[ownerId].stories.push(story);
+  });
+  Object.keys(storiesByUser).forEach(ownerId => {
+    storiesByUser[ownerId].stories.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  });
+  for (const ownerId of Object.keys(storiesByUser)) {
+    const storyIds = storiesByUser[ownerId].stories.map(s => s._id);
+    const hasViewed = await StoryInteraction.exists({
+      story: { $in: storyIds },
+      viewer: currentUserId,
+      type: 'view',
+    });
+    storiesByUser[ownerId].hasViewed = !!hasViewed;
+  }
+  return Object.values(storiesByUser).sort((a, b) => {
+    const aLatest = new Date(a.stories[a.stories.length - 1].createdAt);
+    const bLatest = new Date(b.stories[b.stories.length - 1].createdAt);
+    if (a.hasViewed !== b.hasViewed) return a.hasViewed ? 1 : -1;
+    return bLatest - aLatest;
+  });
+}
+
+// Get stories for the current user's feed — Instagram-style priority:
+// Case A: User follows 0 → show only public stories (non-followed, exclude private accounts).
+// Case B: User follows 1+ → show followed users' stories first; if they have any, return only those;
+//         if none, fallback to public stories.
+export const getStoriesFeed = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const now = new Date();
+
+    const friendships = await FriendRequest.find({
+      $or: [
+        { fromUser: userId, status: 'accepted' },
+        { toUser: userId, status: 'accepted' }
+      ]
+    }).select('fromUser toUser');
+
+    const followingIds = [...new Set(friendships.map(f => {
+      const from = f.fromUser.toString();
+      const _to = f.toUser.toString();
+      return from === userId.toString() ? f.toUser : f.fromUser;
+    }).map(id => new mongoose.Types.ObjectId(id.toString())))];
+
+    // Step 1: If user follows 1+ users, get stories from followed users (not expired)
+    let feedStories = [];
+    if (followingIds.length > 0) {
+      const followedStories = await Story.find({
+        user: { $in: followingIds },
+        isActive: true,
+        isRemoved: { $ne: true },
+        expiresAt: { $gt: now },
+      })
+        .populate('user', 'name profileImage subscription accountType')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      for (const story of followedStories) {
+        const owner = story.user;
+        if (!owner) continue;
+        const isPrivateAccount = owner.accountType === 'private';
+        if (story.privacy === 'public') {
+          feedStories.push(story);
+        } else if (story.privacy === 'followers' || story.privacy === 'close_friends') {
+          if (isPrivateAccount) {
+            const isAccepted = followingIds.some(fid => fid.toString() === owner._id.toString());
+            if (isAccepted) feedStories.push(story);
+          } else {
+            feedStories.push(story);
+          }
+        }
+      }
+
+      if (feedStories.length > 0) {
+        const storiesArray = await groupStoriesByUserAndSort(feedStories, userId);
+        return res.status(200).json({ success: true, data: storiesArray });
+      }
+    }
+
+    // Case A (0 following) or Case B fallback: public stories from non-followed users, exclude private accounts
+    const excludeUserIds = [...followingIds, new mongoose.Types.ObjectId(userId)];
+    const publicStories = await Story.aggregate([
+      { $match: { privacy: 'public', isActive: true, isRemoved: { $ne: true }, expiresAt: { $gt: now }, user: { $nin: excludeUserIds } } },
+      { $lookup: { from: 'users', localField: 'user', foreignField: '_id', as: 'userDoc' } },
+      { $unwind: '$userDoc' },
+      { $match: { 'userDoc.accountType': 'public' } },
+      { $addFields: { user: { _id: '$userDoc._id', name: '$userDoc.name', profileImage: '$userDoc.profileImage', subscription: '$userDoc.subscription', accountType: '$userDoc.accountType' } } },
+      { $project: { userDoc: 0 } },
+      { $sort: { createdAt: -1 } },
+    ]);
+    const storiesArray = await groupStoriesByUserAndSort(publicStories, userId);
+
+    res.status(200).json({
+      success: true,
+      data: storiesArray,
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error fetching stories feed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch stories',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
+// Get a single story by ID
+export const getStoryById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const story = await Story.findById(id)
+      .populate('user', 'name profileImage')
+      .populate('taggedUsers', 'name profileImage');
+
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story not found',
+      });
+    }
+
+    // Check if user can view story
+    const canView = await story.canView(userId);
+    if (!canView) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to view this story',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: story,
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error fetching story:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch story',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
+// View a story (record interaction)
+export const viewStory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const { duration } = req.body;
+
+    const story = await Story.findById(id);
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story not found',
+      });
+    }
+
+    // Check if already viewed - use findOne directly to avoid potential static method issues
+    const existingView = await StoryInteraction.findOne({
+      story: id,
+      viewer: userId,
+      type: 'view',
+    });
+
+    if (!existingView) {
+      // Create view interaction
+      try {
+        const viewInteraction = await StoryInteraction.create({
+          story: id,
+          viewer: userId,
+          type: 'view',
+          duration: duration || 0,
+        });
+
+        console.log('[Story Controller] View interaction created:', {
+          storyId: id,
+          viewerId: userId.toString(),
+          interactionId: viewInteraction._id,
+        });
+
+        // Increment view count and record in Story.views (seen tracking)
+        story.viewCount += 1;
+        await story.save();
+        await Story.updateOne(
+          { _id: id },
+          { $push: { views: { user: userId, viewedAt: new Date() } } }
+        );
+      } catch (createError) {
+        // Handle duplicate key error (race condition)
+        if (createError.code === 11000) {
+          console.log('[Story Controller] Duplicate view detected (race condition)');
+          // Already viewed, just return success
+          return res.status(200).json({
+            success: true,
+            message: 'Story viewed',
+          });
+        }
+        throw createError;
+      }
+    } else {
+      console.log('[Story Controller] Story already viewed by user');
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Story viewed',
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error viewing story:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to record story view',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
+// React to a story (like/emoji)
+export const reactToStory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const { emoji } = req.body;
+
+    const story = await Story.findById(id);
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story not found',
+      });
+    }
+
+    // Check if already reacted
+    const hasReacted = await StoryInteraction.hasInteracted(id, userId, 'like');
+    if (!hasReacted) {
+      await StoryInteraction.create({
+        story: id,
+        viewer: userId,
+        type: 'like',
+        emoji: emoji || '❤️',
+      });
+
+      story.likeCount += 1;
+      await story.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Story reacted',
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error reacting to story:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to react to story',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
+// Reply to a story
+export const replyToStory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    const { message } = req.body;
+
+    if (!message || message.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reply message is required',
+      });
+    }
+
+    const story = await Story.findById(id);
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story not found',
+      });
+    }
+
+    await StoryInteraction.create({
+      story: id,
+      viewer: userId,
+      type: 'reply',
+      replyMessage: message.trim(),
+    });
+
+    story.replyCount += 1;
+    await story.save();
+
+    // TODO: Create a chat message or notification for the story owner
+
+    res.status(200).json({
+      success: true,
+      message: 'Reply sent',
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error replying to story:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reply to story',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
+// Get story viewers
+export const getStoryViewers = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const story = await Story.findById(id);
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story not found',
+      });
+    }
+
+    // Only story owner can see viewers
+    if (story.user.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only story owner can view viewers list',
+      });
+    }
+
+    const viewers = await StoryInteraction.find({
+      story: id,
+      type: 'view',
+    })
+      .populate('viewer', 'name profileImage')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const viewersList = viewers.map(v => ({
+      viewer: v.viewer,
+      viewedAt: v.viewedAt,
+      duration: v.duration,
+    }));
+
+    // Return viewers array and viewCount so frontend shows list and count without delay
+    res.status(200).json({
+      success: true,
+      data: {
+        viewers: viewersList,
+        viewCount: story.viewCount ?? viewers.length,
+      },
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error fetching story viewers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch story viewers',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
+// Delete a story
+export const deleteStory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const story = await Story.findById(id);
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story not found',
+      });
+    }
+
+    // Only story owner can delete
+    if (story.user.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only delete your own stories',
+      });
+    }
+
+    story.isActive = false;
+    await story.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Story deleted successfully',
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error deleting story:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete story',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
+// Get user's own stories
+export const getMyStories = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const now = new Date();
+
+    const stories = await Story.find({
+      user: userId,
+      isActive: true,
+      expiresAt: { $gt: now },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      data: stories,
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error fetching user stories:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch your stories',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
