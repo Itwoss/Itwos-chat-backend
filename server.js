@@ -40,6 +40,8 @@ import supportRoutes from './routes/supportRoutes.js';
 import searchRoutes from './routes/searchRoutes.js';
 import healthRoutes from './routes/healthRoutes.js';
 import { authenticateSocket } from './middleware/socketAuth.js';
+import { authenticate, authorize } from './middleware/auth.js';
+import { addPostToProfile } from './controllers/postController.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -169,6 +171,13 @@ app.use('/api/user/demo-bookings', demoBookingRoutes);
 app.use('/api/user/client-projects', userClientProjectRoutes);
 app.use('/api/user/friends', friendRequestRoutes);
 app.use('/api/user/chat', chatRoutes);
+// Register before postRoutes so this POST always hits (avoids 404 if nested router does not match in some environments)
+app.post(
+  '/api/user/posts/add-to-profile/:postId',
+  authenticate,
+  authorize('user'),
+  addPostToProfile
+);
 app.use('/api/user/posts', postRoutes);
 app.use('/api/user/subscriptions', subscriptionRoutes);
 app.use('/api/user/stories', storyRoutes);

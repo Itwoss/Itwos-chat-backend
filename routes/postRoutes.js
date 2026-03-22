@@ -9,6 +9,10 @@ import {
   getPostById,
   getSavedPosts,
   updateSavedPostFolder,
+  addPostToProfile,
+  removePostAdd,
+  getMyPostAdditions,
+  getUserAddedPosts,
   savePost,
   unsavePost,
   toggleLike,
@@ -50,11 +54,16 @@ const addCommentValidation = [
 router.post('/', uploadForPost, createPostValidation, createPost);
 router.get('/feed', getFeed);
 router.get('/trending-sections', getTrendingSections);
+router.get('/additions/mine', getMyPostAdditions);
+router.get('/user/:userId/added', getUserAddedPosts);
 router.get('/user/:userId', getUserPosts);
 router.get('/saved', getSavedPosts);
 router.put('/saved/:postId/folder', updateSavedPostFolder);
-router.put('/:postId', uploadForPost, updatePost);
-router.get('/:postId', getPostById);
+// Static path first (avoids any ambiguity with /:postId); same handler as /:postId/add
+router.post('/add-to-profile/:postId', addPostToProfile);
+// All POST /:postId/* before bare /:postId (PUT/GET/DELETE) so subpaths always match
+router.post('/:postId/add', addPostToProfile);
+router.post('/:postId/remove-add', removePostAdd);
 router.post('/:postId/save', savePost);
 router.post('/:postId/unsave', unsavePost);
 router.post('/:postId/like', toggleLike);
@@ -62,6 +71,8 @@ router.post('/:postId/comment', addCommentValidation, addComment);
 router.post('/:postId/view', incrementPostView);
 router.post('/:postId/archive', archivePost);
 router.post('/:postId/unarchive', unarchivePost);
+router.put('/:postId', uploadForPost, updatePost);
+router.get('/:postId', getPostById);
 router.delete('/:postId', deletePost);
 
 export default router;
