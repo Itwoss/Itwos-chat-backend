@@ -8,6 +8,7 @@ import {
   replyToStory,
   getStoryViewers,
   deleteStory,
+  archiveStory,
   getMyStories,
 } from '../controllers/storyController.js';
 import { authenticate } from '../middleware/auth.js';
@@ -28,6 +29,7 @@ router.post('/:id/react', reactToStory);
 router.post('/:id/reply', replyToStory);
 router.get('/:id/viewers', getStoryViewers);
 router.delete('/:id', deleteStory);
+router.post('/:id/archive', archiveStory);
 
 export default router;
 

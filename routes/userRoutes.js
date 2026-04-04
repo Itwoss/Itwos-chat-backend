@@ -74,7 +74,11 @@ const updateProfileValidation = [
   body('bio')
     .optional()
     .isString().withMessage('Bio must be a string')
-    .isLength({ max: 500 }).withMessage('Bio cannot exceed 500 characters')
+    .isLength({ max: 500 }).withMessage('Bio cannot exceed 500 characters'),
+  body('gender')
+    .optional()
+    .isIn(['male', 'female', 'other', ''])
+    .withMessage('Gender must be male, female, other, or empty')
 ];
 
 // Routes

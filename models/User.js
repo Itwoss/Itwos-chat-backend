@@ -58,6 +58,11 @@ const userSchema = new mongoose.Schema({
     enum: ['public', 'private'],
     default: 'public'
   },
+  gender: {
+    type: String,
+    enum: ['male', 'female', 'other'],
+    required: false
+  },
   onlineStatus: {
     type: String,
     enum: ['online', 'offline', 'away'],

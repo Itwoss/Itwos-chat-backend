@@ -3,10 +3,8 @@ import User from '../models/User.js';
 import { generateToken } from '../utils/generateToken.js';
 import { validationResult } from 'express-validator';
 import cloudinary from '../utils/cloudinary.js';
-import Project from '../models/Project.js';
 import Team from '../models/Team.js';
 import DemoBooking from '../models/DemoBooking.js';
-import ClientProject from '../models/ClientProject.js';
 import Meeting from '../models/Meeting.js';
 import Chat from '../models/Chat.js';
 import Message from '../models/Message.js';
@@ -194,16 +192,9 @@ export const getCurrentAdmin = async (req, res) => {
     }
 
     // Get additional stats for admin
-    const [
-      totalUsersManaged,
-      totalProjectsManaged,
-      totalBookingsManaged,
-      totalClientProjectsManaged
-    ] = await Promise.all([
+    const [totalUsersManaged, totalBookingsManaged] = await Promise.all([
       User.countDocuments({ role: { $ne: 'admin' } }),
-      Project.countDocuments(),
-      DemoBooking.countDocuments(),
-      ClientProject.countDocuments()
+      DemoBooking.countDocuments()
     ]);
 
     res.status(200).json({
@@ -222,9 +213,7 @@ export const getCurrentAdmin = async (req, res) => {
         updatedAt: admin.updatedAt,
         stats: {
           totalUsersManaged,
-          totalProjectsManaged,
-          totalBookingsManaged,
-          totalClientProjectsManaged
+          totalBookingsManaged
         }
       }
     });
@@ -412,11 +401,6 @@ export const getAdminStats = async (req, res) => {
       recentUsers,
       usersLast30Days,
       
-      // Projects
-      totalProjects,
-      activeProjects,
-      recentProjects,
-      
       // Teams
       totalTeams,
       activeTeams,
@@ -426,10 +410,6 @@ export const getAdminStats = async (req, res) => {
       confirmedBookings,
       pendingBookings,
       recentBookings,
-      
-      // Client Projects
-      totalClientProjects,
-      activeClientProjects,
       
       // Meetings
       totalMeetings,
@@ -507,13 +487,6 @@ export const getAdminStats = async (req, res) => {
         createdAt: { $gte: thirtyDaysAgo }
       }),
       
-      // Projects
-      Project.countDocuments(),
-      Project.countDocuments({ isActive: true }),
-      Project.countDocuments({
-        createdAt: { $gte: sevenDaysAgo }
-      }),
-      
       // Teams
       Team.countDocuments(),
       Team.countDocuments({ isActive: true }),
@@ -525,10 +498,6 @@ export const getAdminStats = async (req, res) => {
       DemoBooking.countDocuments({
         createdAt: { $gte: sevenDaysAgo }
       }),
-      
-      // Client Projects
-      ClientProject.countDocuments(),
-      ClientProject.countDocuments({ isActive: true }),
       
       // Meetings
       Meeting.countDocuments(),
@@ -658,12 +627,6 @@ export const getAdminStats = async (req, res) => {
           recent: recentUsers,
           last30Days: usersLast30Days
         },
-        projects: {
-          total: totalProjects,
-          active: activeProjects,
-          inactive: totalProjects - activeProjects,
-          recent: recentProjects
-        },
         teams: {
           total: totalTeams,
           active: activeTeams,
@@ -674,11 +637,6 @@ export const getAdminStats = async (req, res) => {
           confirmed: confirmedBookings,
           pending: pendingBookings,
           recent: recentBookings
-        },
-        clientProjects: {
-          total: totalClientProjects,
-          active: activeClientProjects,
-          inactive: totalClientProjects - activeClientProjects
         },
         meetings: {
           total: totalMeetings,

@@ -9,12 +9,8 @@ import userRoutes from './routes/userRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import adminUserRoutes from './routes/adminUserRoutes.js';
 import adminTeamRoutes from './routes/adminTeamRoutes.js';
-import adminProjectRoutes from './routes/adminProjectRoutes.js';
-import userProjectRoutes from './routes/userProjectRoutes.js';
 import demoBookingRoutes from './routes/demoBookingRoutes.js';
 import adminBookingRoutes from './routes/adminBookingRoutes.js';
-import adminClientProjectRoutes from './routes/adminClientProjectRoutes.js';
-import userClientProjectRoutes from './routes/userClientProjectRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import meetingRoutes from './routes/meetingRoutes.js';
 import friendRequestRoutes from './routes/friendRequestRoutes.js';
@@ -166,9 +162,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/chatapp')
   .catch((error) => console.error('MongoDB connection error:', error));
 
 // Routes - mount specific /api/user/* paths BEFORE generic /api/user (so /:id does not match "demo-bookings", etc.)
-app.use('/api/user/projects', userProjectRoutes);
 app.use('/api/user/demo-bookings', demoBookingRoutes);
-app.use('/api/user/client-projects', userClientProjectRoutes);
 app.use('/api/user/friends', friendRequestRoutes);
 app.use('/api/user/chat', chatRoutes);
 // Register before postRoutes so this POST always hits (avoids 404 if nested router does not match in some environments)
@@ -186,9 +180,7 @@ app.use('/api/user', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/users', adminUserRoutes);
 app.use('/api/admin/teams', adminTeamRoutes);
-app.use('/api/admin/projects', adminProjectRoutes);
 app.use('/api/admin/bookings', adminBookingRoutes);
-app.use('/api/admin/client-projects', adminClientProjectRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/meetings', meetingRoutes);
 app.use('/api/admin/chat', adminChatRoutes);

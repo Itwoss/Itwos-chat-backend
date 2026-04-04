@@ -531,6 +531,49 @@ export const deleteStory = async (req, res) => {
   }
 };
 
+// Archive a story
+export const archiveStory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const story = await Story.findById(id);
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        message: 'Story not found',
+      });
+    }
+
+    // Only story owner can archive
+    if (story.user.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only archive your own stories',
+      });
+    }
+
+    story.isActive = false;
+    story.isRemoved = true;
+    story.removedBy = userId;
+    story.removedAt = new Date();
+    story.removalReason = 'archived';
+    await story.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Story archived successfully',
+    });
+  } catch (error) {
+    console.error('[Story Controller] Error archiving story:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to archive story',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+    });
+  }
+};
+
 // Get user's own stories
 export const getMyStories = async (req, res) => {
   try {

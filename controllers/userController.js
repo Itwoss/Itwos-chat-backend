@@ -467,6 +467,7 @@ export const loginUser = async (req, res) => {
         profileImage: userResponse.profileImage || null,
         bio: userResponse.bio || '',
         accountType: userResponse.accountType || 'public',
+        gender: userResponse.gender || null,
         onlineStatus: userResponse.onlineStatus || 'offline',
         lastSeen: userResponse.lastSeen,
         address: userResponse.address || null,
@@ -514,12 +515,7 @@ export const getCurrentUser = async (req, res) => {
     }
 
     // Get user stats
-    const [
-      totalPosts,
-      totalFriends,
-      totalBookings,
-      totalClientProjects
-    ] = await Promise.all([
+    const [totalPosts, totalFriends, totalBookings] = await Promise.all([
       (await import('../models/Post.js')).default.countDocuments({ author: user._id }),
       (await import('../models/FriendRequest.js')).default.countDocuments({
         $or: [
@@ -527,8 +523,7 @@ export const getCurrentUser = async (req, res) => {
           { toUser: user._id, status: 'accepted' }
         ]
       }).then(count => Math.floor(count / 2)), // Divide by 2 for unique friendships
-      (await import('../models/DemoBooking.js')).default.countDocuments({ user: user._id }),
-      (await import('../models/ClientProject.js')).default.countDocuments({ client: user._id })
+      (await import('../models/DemoBooking.js')).default.countDocuments({ user: user._id })
     ]);
 
     // Safely handle subscription field
@@ -552,6 +547,7 @@ export const getCurrentUser = async (req, res) => {
         profileImage: user.profileImage || null,
         bio: user.bio || '',
         accountType: user.accountType || 'public',
+        gender: user.gender || null,
         onlineStatus: user.onlineStatus || 'offline',
         lastSeen: user.lastSeen,
         privacySettings: user.privacySettings || {
@@ -565,8 +561,7 @@ export const getCurrentUser = async (req, res) => {
         stats: {
           totalPosts,
           totalFriends,
-          totalBookings,
-          totalClientProjects
+          totalBookings
         }
       }
     });
@@ -617,6 +612,7 @@ export const getUserById = async (req, res) => {
         profileImage: user.profileImage || null,
         bio: user.bio || '',
         accountType: user.accountType || 'public',
+        gender: user.gender || null,
         address: user.address || null,
         subscription: subscriptionData,
         stats: {
@@ -708,7 +704,7 @@ export const updateUserProfile = async (req, res) => {
       });
     }
 
-    let { name, email, password, countryCode, phoneNumber, accountType, privacySettings, address } = req.body;
+    let { name, email, password, countryCode, phoneNumber, accountType, privacySettings, address, gender } = req.body;
     const userId = req.user._id;
 
     // Handle address from FormData (nested fields) or JSON
@@ -816,6 +812,15 @@ export const updateUserProfile = async (req, res) => {
       user.accountType = accountType;
     }
 
+    if (gender !== undefined) {
+      const g = typeof gender === 'string' ? gender.trim().toLowerCase() : '';
+      if (g === '' || g === 'null') {
+        user.set('gender', undefined);
+      } else if (['male', 'female', 'other'].includes(g)) {
+        user.gender = g;
+      }
+    }
+
     // Update privacy settings if provided
     if (privacySettings) {
       if (!user.privacySettings) {
@@ -860,6 +865,7 @@ export const updateUserProfile = async (req, res) => {
         profileImage: userResponse.profileImage || null,
         bio: userResponse.bio || '',
         accountType: userResponse.accountType || 'public',
+        gender: userResponse.gender || null,
         onlineStatus: userResponse.onlineStatus || 'offline',
         lastSeen: userResponse.lastSeen,
         privacySettings: userResponse.privacySettings || {
