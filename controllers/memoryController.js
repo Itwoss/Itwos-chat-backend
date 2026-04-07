@@ -2,6 +2,13 @@ import Memory from '../models/Memory.js';
 import cloudinary from '../utils/cloudinary.js';
 import fs from 'fs';
 
+/** Multer `fields` usually returns an array; normalize a single file object. */
+function memoryUploadFiles(req) {
+  const raw = req.files?.files;
+  if (raw == null) return [];
+  return Array.isArray(raw) ? raw : [raw];
+}
+
 /**
  * Create a new memory. Only the authenticated user is set as owner.
  * Memories are private and never shown in feed or to other users.
@@ -9,9 +16,8 @@ import fs from 'fs';
 export const createMemory = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { caption, memoryDate } = req.body;
-    const fileList = req.files?.files || [];
-    const files = Array.isArray(fileList) ? fileList : [];
+    const { title, caption, memoryDate } = req.body;
+    const files = memoryUploadFiles(req);
 
     if (!memoryDate) {
       return res.status(400).json({
@@ -60,6 +66,7 @@ export const createMemory = async (req, res) => {
     const memory = await Memory.create({
       user: userId,
       images: imageUrls,
+      title: (title || '').trim().slice(0, 120),
       caption: (caption || '').trim().slice(0, 500),
       memoryDate: parsedDate,
     });
@@ -139,9 +146,8 @@ export const updateMemory = async (req, res) => {
   try {
     const userId = req.user._id;
     const { memoryId } = req.params;
-    const { caption, memoryDate } = req.body;
-    const fileList = req.files?.files || [];
-    const files = Array.isArray(fileList) ? fileList : [];
+    const { title, caption, memoryDate } = req.body;
+    const files = memoryUploadFiles(req);
 
     const memory = await Memory.findOne({ _id: memoryId, user: userId });
     if (!memory) {
@@ -152,6 +158,7 @@ export const updateMemory = async (req, res) => {
       const parsedDate = new Date(memoryDate);
       if (!Number.isNaN(parsedDate.getTime())) memory.memoryDate = parsedDate;
     }
+    if (title !== undefined) memory.title = (title || '').trim().slice(0, 120);
     if (caption !== undefined) memory.caption = (caption || '').trim().slice(0, 500);
 
     if (files.length > 0) {

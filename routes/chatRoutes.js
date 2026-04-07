@@ -25,7 +25,7 @@ import {
   createChatGroup,
 } from '../controllers/chatController.js';
 import { authenticate, authorize } from '../middleware/auth.js';
-import { uploadSingle } from '../middleware/upload.js';
+import { uploadSingleMaybe } from '../middleware/upload.js';
 
 const router = express.Router();
 
@@ -37,7 +37,7 @@ router.use(authorize('user'));
 router.get('/chats', getUserChats);
 router.get('/chat/:userId', getOrCreateChat);
 router.get('/chat/:chatId/messages', getChatMessages);
-router.post('/message', uploadSingle, sendMessage);
+router.post('/message', uploadSingleMaybe, sendMessage);
 router.delete('/message/:messageId', deleteMessage);
 router.get('/chat-themes', getChatThemes);
 router.post('/chat-themes/create-order', createChatThemeOrder);

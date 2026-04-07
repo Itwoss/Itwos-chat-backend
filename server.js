@@ -35,9 +35,17 @@ import abuseRoutes from './routes/abuseRoutes.js';
 import supportRoutes from './routes/supportRoutes.js';
 import searchRoutes from './routes/searchRoutes.js';
 import healthRoutes from './routes/healthRoutes.js';
+import profileLikeRoutes from './routes/profileLikeRoutes.js';
+import adminProfileLikeRoutes from './routes/adminProfileLikeRoutes.js';
 import { authenticateSocket } from './middleware/socketAuth.js';
-import { authenticate, authorize } from './middleware/auth.js';
+import { authenticate, authorize, optionalAuthenticate } from './middleware/auth.js';
+import {
+  postProfileLike,
+  getProfileTotalLikes,
+  getProfileLikeStatus,
+} from './controllers/profileLikeController.js';
 import { addPostToProfile } from './controllers/postController.js';
+import { getOpenPostLandingHtml } from './controllers/openPostController.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -150,6 +158,9 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 5001;
 
+// Public OG landing for shared post links (WhatsApp / iMessage) — no auth
+app.get('/open/post/:postId', getOpenPostLandingHtml);
+
 // Middleware
 app.use(cors(corsOptions));
 app.use(express.json());
@@ -176,8 +187,14 @@ app.use('/api/user/posts', postRoutes);
 app.use('/api/user/subscriptions', subscriptionRoutes);
 app.use('/api/user/stories', storyRoutes);
 app.use('/api/user/memories', memoryRoutes);
+// Profile likes — top-level routes (same pattern as add-to-profile) so POST/GET always hit before user router
+app.get('/api/user/profile/:id/likes', getProfileTotalLikes);
+app.get('/api/user/profile/:id/like-status', optionalAuthenticate, getProfileLikeStatus);
+app.post('/api/user/profile/:id/like', authenticate, postProfileLike);
 app.use('/api/user', userRoutes);
+app.use('/api/profile', profileLikeRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin', adminProfileLikeRoutes);
 app.use('/api/admin/users', adminUserRoutes);
 app.use('/api/admin/teams', adminTeamRoutes);
 app.use('/api/admin/bookings', adminBookingRoutes);
@@ -425,6 +442,18 @@ io.on('connection', async (socket) => {
       userId,
       isTyping: false
     });
+  });
+
+  socket.on('join_profile', (data) => {
+    const pid = data?.profileId;
+    if (!pid || typeof pid !== 'string' || !/^[0-9a-fA-F]{24}$/.test(pid)) return;
+    socket.join(`profile_${pid}`);
+  });
+
+  socket.on('leave_profile', (data) => {
+    const pid = data?.profileId;
+    if (!pid || typeof pid !== 'string') return;
+    socket.leave(`profile_${pid}`);
   });
 
   socket.on('disconnect', async () => {

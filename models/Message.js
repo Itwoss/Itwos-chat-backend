@@ -23,8 +23,14 @@ const messageSchema = new mongoose.Schema({
   },
   messageType: {
     type: String,
-    enum: ['text', 'image', 'file', 'audio'],
+    enum: ['text', 'image', 'file', 'audio', 'post_share'],
     default: 'text'
+  },
+  sharedPost: {
+    postId: { type: mongoose.Schema.Types.ObjectId, ref: 'Post' },
+    title: { type: String, default: '' },
+    imageUrl: { type: String, default: '' },
+    mediaKind: { type: String, enum: ['image', 'video', 'none'], default: 'none' },
   },
   attachments: [{
     url: {

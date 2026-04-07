@@ -94,6 +94,37 @@ export const authenticate = async (req, res, next) => {
   }
 };
 
+/**
+ * If Authorization / cookies contain a valid user token, sets req.user; otherwise continues without user.
+ * Used for endpoints that behave differently for guests vs logged-in users.
+ */
+export const optionalAuthenticate = async (req, res, next) => {
+  try {
+    const allCookies = req.cookies || {};
+    let token =
+      allCookies.userToken ||
+      allCookies.adminToken ||
+      null;
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      }
+    }
+    if (!token) {
+      req.user = null;
+      return next();
+    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id).select('-password');
+    req.user = user || null;
+    return next();
+  } catch (_error) {
+    req.user = null;
+    return next();
+  }
+};
+
 export const authorize = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {

@@ -10,6 +10,12 @@ const memorySchema = new mongoose.Schema({
   images: [{
     type: String, // Cloudinary URLs
   }],
+  title: {
+    type: String,
+    trim: true,
+    default: '',
+    maxlength: [120, 'Memory title cannot exceed 120 characters'],
+  },
   caption: {
     type: String,
     trim: true,

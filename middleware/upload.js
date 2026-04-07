@@ -68,6 +68,16 @@ const upload = multer({
 });
 
 export const uploadSingle = upload.single('file');
+
+/** Use only for multipart; running multer on JSON clears req.body and breaks share-post sends. */
+export function uploadSingleMaybe(req, res, next) {
+  const ct = String(req.headers['content-type'] || '').toLowerCase();
+  if (ct.includes('multipart/form-data')) {
+    return uploadSingle(req, res, next);
+  }
+  next();
+}
+
 export const uploadMultiple = upload.array('files', 10); // Max 10 files
 /** For create post: files array + optional video thumbnail image */
 export const uploadForPost = upload.fields([

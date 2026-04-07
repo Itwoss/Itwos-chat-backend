@@ -7,6 +7,7 @@ import UserChatThemePurchase from '../models/UserChatThemePurchase.js';
 import UserChatPrefs from '../models/UserChatPrefs.js';
 import FriendRequest from '../models/FriendRequest.js';
 import User from '../models/User.js';
+import Post from '../models/Post.js';
 
 import { createOrder as createRazorpayOrder, verifyPaymentSignature } from '../utils/razorpay.js';
 import { createNotification } from './notificationController.js';
@@ -184,7 +185,9 @@ export const getUserChats = async (req, res) => {
     const chatsWithOtherUser = chats.map(chat => {
       let decryptedContent = null;
       if (chat.lastMessage) {
-        if (chat.lastMessage.isEncrypted && chat.lastMessage.content) {
+        if (chat.lastMessage.messageType === 'post_share') {
+          decryptedContent = '📎 Shared a post';
+        } else if (chat.lastMessage.isEncrypted && chat.lastMessage.content) {
           try {
             decryptedContent = decryptMessage(chat.lastMessage.content);
           } catch (error) {
@@ -194,8 +197,7 @@ export const getUserChats = async (req, res) => {
         } else {
           decryptedContent = chat.lastMessage.content;
         }
-        
-        // Handle message type display
+
         if (chat.lastMessage.messageType === 'image') {
           decryptedContent = '📷 Image';
         } else if (chat.lastMessage.messageType === 'file') {
@@ -253,7 +255,7 @@ export const getChatMessages = async (req, res) => {
         { $or: [{ sender: userId }, { receiver: userId }] }
       ]
     })
-      .select('sender receiver content messageType attachments status isRead readAt deliveredAt isEncrypted createdAt isDeleted deletedForEveryone replyTo')
+      .select('sender receiver content messageType attachments sharedPost status isRead readAt deliveredAt isEncrypted createdAt isDeleted deletedForEveryone replyTo')
       .populate('sender', 'name email profileImage')
       .populate('receiver', 'name email profileImage')
       .populate({ path: 'replyTo', select: 'content sender messageType isDeleted deletedForEveryone', populate: { path: 'sender', select: 'name' } })
@@ -283,7 +285,7 @@ export const getChatMessages = async (req, res) => {
         }
         msg.replyTo.content = sanitizeContent(msg.replyTo.content);
       }
-      if (msg.isEncrypted && msg.content) {
+      if (msg.messageType !== 'post_share' && msg.isEncrypted && msg.content) {
         try {
           msg.content = decryptMessage(msg.content);
         } catch (_err) {
@@ -291,8 +293,9 @@ export const getChatMessages = async (req, res) => {
           msg.content = '[Message could not be decrypted]';
         }
       }
-      // Never send raw hex/ciphertext to client
-      msg.content = sanitizeContent(msg.content);
+      if (msg.messageType !== 'post_share') {
+        msg.content = sanitizeContent(msg.content);
+      }
       return msg;
     });
 
@@ -356,25 +359,50 @@ export const getChatMessages = async (req, res) => {
   }
 };
 
+function normalizeIdInput(val) {
+  if (val == null || val === '') return '';
+  if (Array.isArray(val)) return normalizeIdInput(val[0]);
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'object' && val.$oid) return String(val.$oid).trim();
+  return String(val).trim();
+}
+
+function parseSharedPostNested(body) {
+  let sp = body?.sharedPost;
+  if (sp == null) return null;
+  if (typeof sp === 'string') {
+    try {
+      sp = JSON.parse(sp);
+    } catch {
+      return null;
+    }
+  }
+  return typeof sp === 'object' && sp !== null && !Array.isArray(sp) ? sp : null;
+}
+
 // Send message
 export const sendMessage = async (req, res) => {
   try {
     const senderId = req.user._id;
-    let { chatId, content = '', messageType = 'text', replyTo } = req.body;
-    
-    // Validate chatId
-    if (!chatId || typeof chatId !== 'string') {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    let chatId = normalizeIdInput(body.chatId);
+    let content = body.content != null ? String(body.content) : '';
+    let messageType =
+      typeof body.messageType === 'string' && body.messageType.trim() ? body.messageType.trim() : 'text';
+    const replyTo = body.replyTo;
+    const allowedTypes = ['text', 'image', 'file', 'audio', 'post_share'];
+    if (!allowedTypes.includes(messageType)) messageType = 'text';
+
+    if (!chatId) {
       return res.status(400).json({
         success: false,
-        message: 'Chat ID is required and must be a valid string'
+        message: 'Chat ID is required and must be a valid string',
       });
     }
-    
-    // Handle FormData (file upload): single file (req.file) or multiple files (req.files – use multer.array('files', 10))
+
     let attachments = [];
     const fs = await import('fs').then(m => m.default);
     const cloudinary = (await import('../utils/cloudinary.js')).default;
-    // Support: multer.array('files', 10) → req.files is array; multer.fields([{ name: 'file', maxCount: 1 }, { name: 'files', maxCount: 10 }]) → req.files.files
     const fileList = (Array.isArray(req.files) && req.files.length > 0)
       ? req.files
       : (req.files?.files && req.files.files.length > 0)
@@ -382,6 +410,76 @@ export const sendMessage = async (req, res) => {
         : req.file
           ? [req.file]
           : [];
+
+    const q = req.query || {};
+    const nestedShared = parseSharedPostNested(body);
+    const rawSharedPostId =
+      normalizeIdInput(body.sharedPostPostId) ||
+      normalizeIdInput(q.sharedPostPostId) ||
+      normalizeIdInput(body.feedPostId) ||
+      normalizeIdInput(q.feedPostId) ||
+      normalizeIdInput(body.sharedPostId) ||
+      normalizeIdInput(q.sharedPostId) ||
+      (nestedShared ? normalizeIdInput(nestedShared.postId) : '');
+
+    let sharedPostSnapshot = null;
+    if (rawSharedPostId) {
+      if (fileList.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot attach files to a shared post message',
+        });
+      }
+      const pid = String(rawSharedPostId).trim();
+      if (!mongoose.Types.ObjectId.isValid(pid)) {
+        return res.status(400).json({ success: false, message: 'Invalid post id' });
+      }
+      const shared = await Post.findById(pid).lean();
+      if (!shared || shared.isRemoved) {
+        return res.status(404).json({ success: false, message: 'Post not found' });
+      }
+      const authorId = shared.author?.toString?.() || shared.author;
+      const isOwnPost = authorId && authorId.toString() === senderId.toString();
+      if (shared.isArchived && !isOwnPost) {
+        return res.status(404).json({ success: false, message: 'Post not found' });
+      }
+      const author = await User.findById(authorId).select('accountType').lean();
+      if (!author) {
+        return res.status(404).json({ success: false, message: 'Post not found' });
+      }
+      if (!isOwnPost && author.accountType === 'private') {
+        const friendship = await FriendRequest.findOne({
+          $or: [
+            { fromUser: senderId, toUser: authorId, status: 'accepted' },
+            { fromUser: authorId, toUser: senderId, status: 'accepted' },
+          ],
+        }).lean();
+        if (!friendship) {
+          return res.status(403).json({
+            success: false,
+            message: 'You cannot share this post',
+          });
+        }
+      }
+      const imageUrl =
+        (shared.images && shared.images[0]) ||
+        shared.videoThumbnail ||
+        (shared.sound && shared.sound.thumbnail) ||
+        '';
+      const mediaKind = shared.video ? 'video' : shared.images?.length ? 'image' : 'none';
+      sharedPostSnapshot = {
+        postId: shared._id,
+        title: (shared.title && String(shared.title).trim()) || 'Post',
+        imageUrl,
+        mediaKind,
+      };
+      messageType = 'post_share';
+      content = 'Post';
+    }
+
+    if (messageType === 'post_share' && !sharedPostSnapshot) {
+      messageType = 'text';
+    }
 
     if (fileList.length > 0) {
       try {
@@ -437,13 +535,20 @@ export const sendMessage = async (req, res) => {
       });
     }
 
-    // Get receiver
     const receiverId = chat.participants.find(p => p.toString() !== senderId.toString());
+    if (!receiverId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid chat: could not resolve receiver',
+      });
+    }
 
-    // Encrypt message content (only if it's not a default placeholder)
-    const encryptedContent = content && content !== 'Image' && !attachments.some(a => a.name === content)
-      ? encryptMessage(content)
-      : content;
+    const skipEncrypt =
+      messageType === 'post_share' ||
+      !content ||
+      content === 'Image' ||
+      attachments.some((a) => a.name === content);
+    const encryptedContent = skipEncrypt ? content : encryptMessage(content);
 
     const messagePayload = {
       chatId,
@@ -453,11 +558,31 @@ export const sendMessage = async (req, res) => {
       messageType,
       attachments,
       status: 'sent',
-      isEncrypted: encryptedContent !== content
+      isEncrypted: !skipEncrypt && encryptedContent !== content,
     };
+    if (sharedPostSnapshot) {
+      messagePayload.sharedPost = sharedPostSnapshot;
+      messagePayload.isEncrypted = false;
+    }
     if (replyTo && typeof replyTo === 'string') {
       messagePayload.replyTo = replyTo;
     }
+
+    let finalContent = String(messagePayload.content ?? '').trim();
+    if (!finalContent) {
+      if (sharedPostSnapshot) {
+        finalContent = 'Post';
+        messagePayload.content = 'Post';
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Message content is required',
+        });
+      }
+    } else {
+      messagePayload.content = finalContent;
+    }
+
     const message = await Message.create(messagePayload);
 
     // Update chat's last message - optimized with updateOne
@@ -475,8 +600,11 @@ export const sendMessage = async (req, res) => {
       .populate('receiver', 'name email profileImage')
       .lean();
 
-    // Decrypt content for response (sender can see their own message)
-    if (populatedMessage.isEncrypted && populatedMessage.content) {
+    if (
+      populatedMessage.messageType !== 'post_share' &&
+      populatedMessage.isEncrypted &&
+      populatedMessage.content
+    ) {
       try {
         populatedMessage.content = decryptMessage(populatedMessage.content);
       } catch (_) {
@@ -499,25 +627,33 @@ export const sendMessage = async (req, res) => {
       console.warn('[Chat] Socket emit new-message failed (non-blocking):', emitErr?.message);
     }
 
-    // Create notification for receiver
-    await createNotification(
-      receiverId,
-      'message',
-      'New Message',
-      `${req.user.name} sent you a message`,
-      null,
-      null,
-      `/user/chat/${senderId}`
-    );
+    try {
+      await createNotification(
+        receiverId,
+        'message',
+        'New Message',
+        `${req.user.name} sent you a message`,
+        null,
+        null,
+        `/user/chat/${senderId}`
+      );
+    } catch (notifErr) {
+      console.warn('[sendMessage] createNotification:', notifErr?.message);
+    }
 
     // Always send Web Push (Socket + Push). Required for iOS PWA when app is closed – backend MUST send push on every message.
     try {
       const { sendPushToUser } = await import('../services/pushService.js');
-      const bodyText = messageType === 'text' && content && content.trim()
-        ? (content.slice(0, 60) + (content.length > 60 ? '…' : ''))
-        : (messageType === 'image'
-          ? (attachments.length > 1 ? `Sent ${attachments.length} photos` : 'Sent a photo')
-          : messageType === 'audio' ? 'Sent a voice message' : 'Sent a message');
+      const bodyText =
+        messageType === 'post_share'
+          ? 'Shared a post'
+          : messageType === 'text' && content && content.trim()
+            ? (content.slice(0, 60) + (content.length > 60 ? '…' : ''))
+            : messageType === 'image'
+              ? (attachments.length > 1 ? `Sent ${attachments.length} photos` : 'Sent a photo')
+              : messageType === 'audio'
+                ? 'Sent a voice message'
+                : 'Sent a message';
       const pushPayload = {
         title: req.user.name || 'New message',
         body: bodyText,
@@ -538,7 +674,6 @@ export const sendMessage = async (req, res) => {
       console.warn('[Chat] Push notification failed (non-blocking):', pushErr?.message);
     }
 
-    // Add count for valid chat message (only text messages, not duplicates)
     if (messageType === 'text' && content && content.trim()) {
       try {
         const messageHash = hashMessage(content);

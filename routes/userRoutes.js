@@ -14,8 +14,13 @@ import {
   removePushSubscription,
   sendTestPush,
 } from '../controllers/pushSubscriptionController.js';
-import { authenticate, authorize } from '../middleware/auth.js';
+import { authenticate, authorize, optionalAuthenticate } from '../middleware/auth.js';
 import { uploadSingle } from '../middleware/upload.js';
+import {
+  postProfileLike,
+  getProfileTotalLikes,
+  getProfileLikeStatus,
+} from '../controllers/profileLikeController.js';
 
 const router = express.Router();
 
@@ -90,6 +95,10 @@ router.get('/push-subscription/vapid-public-key', getVapidPublicKey);
 router.post('/push-subscription', authenticate, authorize('user'), savePushSubscription);
 router.delete('/push-subscription', authenticate, authorize('user'), removePushSubscription);
 router.post('/push-subscription/test', authenticate, authorize('user'), sendTestPush);
+// Profile daily likes (must be before /:id so "profile" is never parsed as a user id)
+router.get('/profile/:id/likes', getProfileTotalLikes);
+router.get('/profile/:id/like-status', optionalAuthenticate, getProfileLikeStatus);
+router.post('/profile/:id/like', authenticate, postProfileLike);
 // Only match valid MongoDB ObjectId (24 hex chars) so paths like "client-projects" or "demo-bookings" are not treated as user IDs
 router.get('/:id([0-9a-fA-F]{24})', authenticate, authorize('user'), getUserById);
 router.post('/logout', authenticate, authorize('user'), logoutUser);
