@@ -1,4 +1,6 @@
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import { OAuth2Client } from 'google-auth-library';
 import User from '../models/User.js';
 import { generateToken } from '../utils/generateToken.js';
 import { validationResult } from 'express-validator';
@@ -186,6 +188,80 @@ const isValidCountryCode = (code) => {
   return COUNTRY_CODES.some(country => country.code === normalized);
 };
 
+function getUserTokenCookieOptions(req) {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const cookieOptions = {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: '/',
+  };
+  if (isProduction) {
+    const host = (req.headers.host || req.hostname || '').split(':')[0];
+    const origin = req.headers.origin;
+    if (origin) {
+      try {
+        const originUrl = new URL(origin);
+        if (originUrl.hostname.endsWith('.itwos.store') || originUrl.hostname === 'itwos.store') {
+          cookieOptions.domain = '.itwos.store';
+        } else if (originUrl.hostname.endsWith('.ondigitalocean.app')) {
+          const parts = originUrl.hostname.split('.');
+          if (parts.length >= 2) cookieOptions.domain = `.${parts.slice(-2).join('.')}`;
+        }
+      } catch (e) {
+        console.warn('[Cookie] Could not parse origin:', e.message);
+      }
+    }
+    if (!cookieOptions.domain && (host === 'api.itwos.store' || host.endsWith('.itwos.store'))) {
+      cookieOptions.domain = '.itwos.store';
+    }
+  }
+  return cookieOptions;
+}
+
+function setUserTokenCookie(res, req, token) {
+  const cookieOptions = getUserTokenCookieOptions(req);
+  res.cookie('userToken', token, cookieOptions);
+  res.setHeader('X-Cookie-Set', 'true');
+  res.setHeader('X-Cookie-SameSite', cookieOptions.sameSite);
+  res.setHeader('X-Cookie-Secure', String(cookieOptions.secure));
+  res.setHeader('X-Cookie-Domain', cookieOptions.domain || 'not-set');
+}
+
+function buildLoginResponseJson(userResponse, token) {
+  const subscription = userResponse.subscription || {};
+  const subscriptionData = {
+    badgeType: subscription.badgeType || null,
+    subscriptionId: subscription.subscriptionId || null,
+  };
+  return {
+    success: true,
+    message: 'Login successful',
+    data: {
+      id: userResponse._id,
+      name: userResponse.name,
+      email: userResponse.email,
+      role: userResponse.role,
+      countryCode: userResponse.countryCode,
+      phoneNumber: userResponse.phoneNumber,
+      fullNumber: userResponse.fullNumber,
+      isActive: userResponse.isActive,
+      profileImage: userResponse.profileImage || null,
+      bio: userResponse.bio || '',
+      accountType: userResponse.accountType || 'public',
+      gender: userResponse.gender || null,
+      onlineStatus: userResponse.onlineStatus || 'offline',
+      lastSeen: userResponse.lastSeen,
+      address: userResponse.address || null,
+      subscription: subscriptionData,
+      createdAt: userResponse.createdAt,
+      updatedAt: userResponse.updatedAt,
+    },
+    token,
+  };
+}
+
 // Register user
 export const registerUser = async (req, res) => {
   try {
@@ -358,7 +434,9 @@ export const loginUser = async (req, res) => {
     if (!isPasswordValid) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid email or password'
+        message: user.googleId
+          ? 'Invalid email or password. You can also continue with Google.'
+          : 'Invalid email or password',
       });
     }
 
@@ -381,60 +459,17 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Set cookie with role-based name
-    // For production cross-origin (Digital Ocean -> Digital Ocean), use 'none' with secure
-    // For development same-origin, use 'lax'
-    const isProduction = process.env.NODE_ENV === 'production';
-    const cookieOptions = {
-      httpOnly: true,
-      secure: isProduction, // Required for sameSite: 'none' (iOS requirement)
-      sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin, 'lax' for same-origin
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      path: '/', // Make cookie available for all routes
-    };
-    
-    // CRITICAL: Set domain for cross-origin cookies (itwos.store frontend -> api.itwos.store)
-    if (isProduction) {
-      const host = (req.headers.host || req.hostname || '').split(':')[0];
-      const origin = req.headers.origin;
-      if (origin) {
-        try {
-          const originUrl = new URL(origin);
-          if (originUrl.hostname.endsWith('.itwos.store') || originUrl.hostname === 'itwos.store') {
-            cookieOptions.domain = '.itwos.store';
-          } else if (originUrl.hostname.endsWith('.ondigitalocean.app')) {
-            const parts = originUrl.hostname.split('.');
-            if (parts.length >= 2) cookieOptions.domain = `.${parts.slice(-2).join('.')}`;
-          }
-        } catch (e) {
-          console.warn('[Cookie] Could not parse origin:', e.message);
-        }
-      }
-      // Fallback: if API is api.itwos.store (proxy may strip Origin), set domain so cookie works
-      if (!cookieOptions.domain && (host === 'api.itwos.store' || host.endsWith('.itwos.store'))) {
-        cookieOptions.domain = '.itwos.store';
-      }
-    }
-    
-    res.cookie('userToken', token, cookieOptions);
-    
-    // Enhanced logging for iOS debugging
+    setUserTokenCookie(res, req, token);
+    const cookieOptions = getUserTokenCookieOptions(req);
     console.log('[Login] Cookie set with options:', {
       httpOnly: cookieOptions.httpOnly,
       secure: cookieOptions.secure,
       sameSite: cookieOptions.sameSite,
       path: cookieOptions.path,
       domain: cookieOptions.domain || 'not set (same-origin)',
-      isProduction,
+      isProduction: process.env.NODE_ENV === 'production',
       origin: req.headers.origin,
-      'set-cookie-header': `userToken=${token.substring(0, 20)}...; HttpOnly; Secure=${cookieOptions.secure}; SameSite=${cookieOptions.sameSite}; Path=${cookieOptions.path}; Max-Age=${cookieOptions.maxAge}${cookieOptions.domain ? `; Domain=${cookieOptions.domain}` : ''}`
     });
-    
-    // Also set response headers to help debug (iOS can check these)
-    res.setHeader('X-Cookie-Set', 'true');
-    res.setHeader('X-Cookie-SameSite', cookieOptions.sameSite);
-    res.setHeader('X-Cookie-Secure', cookieOptions.secure.toString());
-    res.setHeader('X-Cookie-Domain', cookieOptions.domain || 'not-set');
 
     const userResponse = await User.findById(user._id).select('-password').lean();
 
@@ -445,50 +480,144 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Safely handle subscription field
-    const subscription = userResponse.subscription || {};
-    const subscriptionData = {
-      badgeType: subscription.badgeType || null,
-      subscriptionId: subscription.subscriptionId || null
-    };
-
-    const responseData = {
-      success: true,
-      message: 'Login successful',
-      data: {
-        id: userResponse._id,
-        name: userResponse.name,
-        email: userResponse.email,
-        role: userResponse.role,
-        countryCode: userResponse.countryCode,
-        phoneNumber: userResponse.phoneNumber,
-        fullNumber: userResponse.fullNumber,
-        isActive: userResponse.isActive,
-        profileImage: userResponse.profileImage || null,
-        bio: userResponse.bio || '',
-        accountType: userResponse.accountType || 'public',
-        gender: userResponse.gender || null,
-        onlineStatus: userResponse.onlineStatus || 'offline',
-        lastSeen: userResponse.lastSeen,
-        address: userResponse.address || null,
-        subscription: subscriptionData,
-        createdAt: userResponse.createdAt,
-        updatedAt: userResponse.updatedAt
-      },
-      // Token for PWA / Add to Home Screen: cookies may not persist when app is closed; frontend sends this as Bearer so session survives
-      token
-    };
-    
     console.log('[Login] Login successful for:', userResponse.email);
-    console.log('[Login] Sending response with user data');
-    
-    res.status(200).json(responseData);
+
+    res.status(200).json(buildLoginResponseJson(userResponse, token));
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({
       success: false,
       message: 'Login failed',
       error: process.env.NODE_ENV === 'development' ? error.message : 'An error occurred during login'
+    });
+  }
+};
+
+// Sign in / sign up with Google (ID token from GIS)
+export const loginWithGoogle = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array(),
+      });
+    }
+
+    const googleClientId = process.env.GOOGLE_CLIENT_ID;
+    if (!googleClientId) {
+      return res.status(503).json({
+        success: false,
+        message: 'Google sign-in is not configured on the server (GOOGLE_CLIENT_ID).',
+      });
+    }
+
+    const { idToken } = req.body;
+    const client = new OAuth2Client(googleClientId);
+    let payload;
+    try {
+      const ticket = await client.verifyIdToken({
+        idToken,
+        audience: googleClientId,
+      });
+      payload = ticket.getPayload();
+    } catch (verifyErr) {
+      console.error('[Google login] Token verify failed:', verifyErr.message);
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired Google sign-in. Please try again.',
+      });
+    }
+
+    if (!payload?.email || !payload.sub) {
+      return res.status(401).json({
+        success: false,
+        message: 'Google account did not return an email.',
+      });
+    }
+
+    const email = String(payload.email).toLowerCase().trim();
+    const sub = String(payload.sub);
+    const name = (payload.name || email.split('@')[0] || 'User').trim().slice(0, 50);
+    const picture = payload.picture || null;
+
+    let user = await User.findOne({
+      $or: [{ googleId: sub }, { email }],
+    });
+
+    if (user) {
+      if (user.googleId && user.googleId !== sub) {
+        return res.status(409).json({
+          success: false,
+          message: 'This email is already linked to a different Google account.',
+        });
+      }
+      if (!user.isActive) {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account has been disabled. Please contact administrator.',
+        });
+      }
+      if (!user.googleId) {
+        user.googleId = sub;
+        if (picture && !user.profileImage) user.profileImage = picture;
+        await user.save();
+      }
+    } else {
+      const randomPassword = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
+      user = await User.create({
+        name,
+        email,
+        password: randomPassword,
+        googleId: sub,
+        countryCode: '',
+        phoneNumber: '',
+        fullNumber: '',
+        profileImage: picture || undefined,
+        role: 'user',
+      });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      console.error('JWT_SECRET is not configured');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error. Please contact administrator.',
+      });
+    }
+
+    const token = generateToken(user._id);
+    if (!token) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to generate authentication token',
+      });
+    }
+
+    setUserTokenCookie(res, req, token);
+    const userResponse = await User.findById(user._id).select('-password').lean();
+    if (!userResponse) {
+      return res.status(500).json({
+        success: false,
+        message: 'Error retrieving user data',
+      });
+    }
+
+    console.log('[Google login] Success:', userResponse.email);
+    res.status(200).json(buildLoginResponseJson(userResponse, token));
+  } catch (error) {
+    console.error('[Google login] Error:', error);
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account with this email or Google ID already exists.',
+      });
+    }
+    res.status(500).json({
+      success: false,
+      message: 'Google sign-in failed',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
@@ -504,8 +633,13 @@ export const getCurrentUser = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user._id).select('-password');
-    
+    const user = await User.findById(req.user._id)
+      .select('-password')
+      .populate(
+        'equippedFont',
+        'name fontFamily googleFontsCssUrl googleFont fontSource cssStyles fontType category price description'
+      );
+
     if (!user) {
       console.error('[User Controller] User not found:', req.user._id);
       return res.status(404).json({
@@ -556,6 +690,7 @@ export const getCurrentUser = async (req, res) => {
         },
         address: user.address || null,
         subscription: subscriptionData,
+        equippedFont: user.equippedFont || null,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
         stats: {
@@ -586,7 +721,13 @@ export const getUserById = async (req, res) => {
     if (!isValidId) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    const user = await User.findById(targetId).select('-password').lean();
+    const user = await User.findById(targetId)
+      .select('-password')
+      .populate(
+        'equippedFont',
+        'name fontFamily googleFontsCssUrl googleFont fontSource cssStyles fontType category price description'
+      )
+      .lean();
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
@@ -615,6 +756,7 @@ export const getUserById = async (req, res) => {
         gender: user.gender || null,
         address: user.address || null,
         subscription: subscriptionData,
+        equippedFont: user.equippedFont || null,
         stats: {
           followers: followersCount,
           following: followingCount,

@@ -7,6 +7,81 @@ import cloudinary from '../utils/cloudinary.js';
 import fs from 'fs';
 import mongoose from 'mongoose';
 import { addCount } from '../services/countService.js';
+import { createNotification } from './notificationController.js';
+import Notification from '../models/Notification.js';
+
+/** First `getTrendingSections` call after boot only seeds snapshot (no burst of notifications). */
+let trendingSnapshotInitialized = false;
+let lastTrendingPostIdSet = new Set();
+
+const TRENDING_NOTIF_MESSAGE =
+  '🎉 Your post is now trending worldwide! Enhance it by updating the thumbnail and adding a catchy one-line title.';
+const TRENDING_NOTIF_TITLE = 'Trending worldwide';
+const TRENDING_NOTIF_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * When a post appears in any trending list and was not on the previous snapshot, notify the author once
+ * (per post, within cooldown window, to avoid duplicates if snapshot resets).
+ */
+async function notifyNewlyTrendingPosts(todaySorted, topLiked, mostDiscussedSorted, mostViewed) {
+  const arrays = [todaySorted, topLiked, mostDiscussedSorted, mostViewed];
+  const currentIds = new Set();
+  const postById = new Map();
+  for (const arr of arrays) {
+    for (const p of arr || []) {
+      if (!p?._id) continue;
+      const id = String(p._id);
+      currentIds.add(id);
+      if (!postById.has(id)) postById.set(id, p);
+    }
+  }
+
+  if (!trendingSnapshotInitialized) {
+    lastTrendingPostIdSet = new Set(currentIds);
+    trendingSnapshotInitialized = true;
+    return;
+  }
+
+  const previous = lastTrendingPostIdSet;
+  const since = new Date(Date.now() - TRENDING_NOTIF_COOLDOWN_MS);
+
+  for (const id of currentIds) {
+    if (previous.has(id)) continue;
+    const post = postById.get(id);
+    if (!post) continue;
+    const authorRef = post.author?._id ?? post.author;
+    if (!authorRef) continue;
+    const ownerId = authorRef.toString();
+    const link = `/user/home?trendingPost=${id}`;
+
+    try {
+      const dup = await Notification.findOne({
+        userId: authorRef,
+        type: 'trending',
+        link,
+        createdAt: { $gte: since },
+      })
+        .select('_id')
+        .lean();
+      if (dup) continue;
+
+      await createNotification(
+        ownerId,
+        'trending',
+        TRENDING_NOTIF_TITLE,
+        TRENDING_NOTIF_MESSAGE,
+        null,
+        null,
+        link,
+        null
+      );
+    } catch (err) {
+      console.error('[PostController] Trending notification error:', err?.message || err);
+    }
+  }
+
+  lastTrendingPostIdSet = new Set(currentIds);
+}
 
 // Create a new post
 export const createPost = async (req, res) => {
@@ -488,6 +563,8 @@ export const getTrendingSections = async (req, res) => {
       .sort({ viewCount: -1 })
       .limit(TRENDING_LIMIT)
       .lean();
+
+    await notifyNewlyTrendingPosts(todaySorted, topLiked, mostDiscussedSorted, mostViewed);
 
     res.status(200).json({
       success: true,
@@ -1059,6 +1136,29 @@ export const toggleLike = async (req, res) => {
       } catch (countError) {
         console.error('[PostController] Error adding count for like:', countError);
       }
+
+      // Notify post owner (Instagram-style), not when liking own post
+      try {
+        const authorRef = post.author?._id ?? post.author;
+        const ownerId = authorRef ? authorRef.toString() : null;
+        if (ownerId && ownerId !== userId.toString()) {
+          const liker = await User.findById(userId).select('name username').lean();
+          const likerName = liker?.name?.trim() || liker?.username?.trim() || 'Someone';
+          const link = `/user/profile/${userId}`;
+          await createNotification(
+            ownerId,
+            'like',
+            'New like',
+            `${likerName} liked your post.`,
+            null,
+            null,
+            link,
+            userId
+          );
+        }
+      } catch (notifErr) {
+        console.error('[PostController] Error creating like notification:', notifErr);
+      }
     }
 
     const updatedPost = await Post.findById(postId)
@@ -1141,6 +1241,31 @@ export const addComment = async (req, res) => {
       });
     } catch (countError) {
       console.error('[PostController] Error adding count for comment:', countError);
+    }
+
+    // Notify post owner (Instagram-style), not when commenting on own post
+    try {
+      const authorRef = post.author?._id ?? post.author;
+      const ownerId = authorRef ? authorRef.toString() : null;
+      if (ownerId && ownerId !== userId.toString()) {
+        const commenter = await User.findById(userId).select('name username').lean();
+        const commenterName = commenter?.name?.trim() || commenter?.username?.trim() || 'Someone';
+        const trimmed = content.trim();
+        const snippet = trimmed.length > 100 ? `${trimmed.slice(0, 100)}…` : trimmed;
+        const link = `/user/profile/${userId}`;
+        await createNotification(
+          ownerId,
+          'comment',
+          'New comment',
+          `${commenterName} commented: ${snippet}`,
+          null,
+          null,
+          link,
+          userId
+        );
+      }
+    } catch (notifErr) {
+      console.error('[PostController] Error creating comment notification:', notifErr);
     }
 
     const updatedPost = await Post.findById(postId)

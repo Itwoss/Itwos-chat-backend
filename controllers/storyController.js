@@ -1,9 +1,27 @@
 import Story from '../models/Story.js';
 import StoryInteraction from '../models/StoryInteraction.js';
 import FriendRequest from '../models/FriendRequest.js';
+import User from '../models/User.js';
+import { createNotification } from './notificationController.js';
 import mongoose from 'mongoose';
 import cloudinary from '../utils/cloudinary.js';
 import fs from 'fs';
+
+/** Notify story owner over Socket.IO to refetch viewers (avoids static import cycle with server.js). */
+async function pushStoryViewersUpdatedToOwner(ownerId, storyId) {
+  if (!ownerId || !storyId) return;
+  try {
+    const { emitStoryViewersUpdated } = await import('../server.js');
+    if (typeof emitStoryViewersUpdated === 'function') {
+      emitStoryViewersUpdated(
+        typeof ownerId === 'string' ? ownerId : ownerId.toString(),
+        { storyId: String(storyId) }
+      );
+    }
+  } catch (e) {
+    console.error('[Story Controller] pushStoryViewersUpdatedToOwner:', e?.message || e);
+  }
+}
 
 // Create a new story
 export const createStory = async (req, res) => {
@@ -297,8 +315,11 @@ export const viewStory = async (req, res) => {
     if (!existingView) {
       // Create view interaction
       try {
+        const storyRef = mongoose.Types.ObjectId.isValid(id)
+          ? new mongoose.Types.ObjectId(String(id))
+          : id;
         const viewInteraction = await StoryInteraction.create({
-          story: id,
+          story: storyRef,
           viewer: userId,
           type: 'view',
           duration: duration || 0,
@@ -317,6 +338,12 @@ export const viewStory = async (req, res) => {
           { _id: id },
           { $push: { views: { user: userId, viewedAt: new Date() } } }
         );
+
+        const ownerRef = story.user?._id ?? story.user;
+        const ownerId = ownerRef ? ownerRef.toString() : null;
+        if (ownerId && ownerId !== userId.toString()) {
+          await pushStoryViewersUpdatedToOwner(ownerId, id);
+        }
       } catch (createError) {
         // Handle duplicate key error (race condition)
         if (createError.code === 11000) {
@@ -365,8 +392,11 @@ export const reactToStory = async (req, res) => {
     // Check if already reacted
     const hasReacted = await StoryInteraction.hasInteracted(id, userId, 'like');
     if (!hasReacted) {
+      const storyRef = mongoose.Types.ObjectId.isValid(id)
+        ? new mongoose.Types.ObjectId(String(id))
+        : id;
       await StoryInteraction.create({
-        story: id,
+        story: storyRef,
         viewer: userId,
         type: 'like',
         emoji: emoji || '❤️',
@@ -374,6 +404,30 @@ export const reactToStory = async (req, res) => {
 
       story.likeCount += 1;
       await story.save();
+
+      const ownerRef = story.user?._id ?? story.user;
+      const ownerId = ownerRef ? ownerRef.toString() : null;
+
+      // Notify story owner (Instagram-style), not when liking own story
+      if (ownerId && ownerId !== userId.toString()) {
+        try {
+          const liker = await User.findById(userId).select('name username').lean();
+          const likerName = liker?.name?.trim() || liker?.username?.trim() || 'Someone';
+          await createNotification(
+            ownerId,
+            'like',
+            'Story like',
+            `${likerName} liked your story.`,
+            null,
+            null,
+            `/user/profile/${userId}`,
+            userId
+          );
+        } catch (notifErr) {
+          console.error('[Story Controller] Error creating story like notification:', notifErr);
+        }
+        await pushStoryViewersUpdatedToOwner(ownerId, id);
+      }
     }
 
     res.status(200).json({
@@ -460,26 +514,136 @@ export const getStoryViewers = async (req, res) => {
       });
     }
 
-    const viewers = await StoryInteraction.find({
-      story: id,
-      type: 'view',
-    })
-      .populate('viewer', 'name profileImage')
-      .sort({ createdAt: -1 })
-      .lean();
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid story id',
+      });
+    }
 
-    const viewersList = viewers.map(v => ({
-      viewer: v.viewer,
-      viewedAt: v.viewedAt,
-      duration: v.duration,
+    const storyOid = new mongoose.Types.ObjectId(String(id));
+    const ixColl = StoryInteraction.collection.name;
+    const usersColl = User.collection.name;
+
+    // Join view rows to like rows in the DB (same viewer + story + type like) so hasLiked cannot drift from JS id string matching.
+    const pipeline = [
+      { $match: { story: storyOid, type: 'view' } },
+      { $sort: { createdAt: -1 } },
+      {
+        $lookup: {
+          from: ixColl,
+          let: { viewerId: '$viewer' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$story', storyOid] },
+                    { $eq: ['$type', 'like'] },
+                    { $eq: ['$viewer', '$$viewerId'] },
+                  ],
+                },
+              },
+            },
+            { $limit: 1 },
+          ],
+          as: 'likeMatch',
+        },
+      },
+      {
+        $lookup: {
+          from: usersColl,
+          localField: 'viewer',
+          foreignField: '_id',
+          as: 'viewerUser',
+        },
+      },
+      {
+        $addFields: {
+          viewerDoc: { $arrayElemAt: ['$viewerUser', 0] },
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          viewedAt: { $ifNull: ['$viewedAt', '$createdAt'] },
+          duration: { $ifNull: ['$duration', 0] },
+          hasLiked: { $gt: [{ $size: '$likeMatch' }, 0] },
+          emoji: { $arrayElemAt: ['$likeMatch.emoji', 0] },
+          viewer: {
+            $cond: {
+              if: { $ne: ['$viewerDoc', null] },
+              then: {
+                _id: '$viewerDoc._id',
+                name: '$viewerDoc.name',
+                username: '$viewerDoc.username',
+                profileImage: '$viewerDoc.profileImage',
+              },
+              else: {
+                _id: '$viewer',
+                name: 'Deleted',
+                username: '',
+                profileImage: null,
+              },
+            },
+          },
+        },
+      },
+    ];
+
+    let viewersList = await StoryInteraction.aggregate(pipeline);
+
+    viewersList = viewersList.map((row) => ({
+      ...row,
+      hasLiked: Boolean(row.hasLiked),
+      emoji: row.emoji || null,
     }));
 
-    // Return viewers array and viewCount so frontend shows list and count without delay
+    const likes = await StoryInteraction.find({ story: storyOid, type: 'like' })
+      .select('viewer emoji createdAt _id')
+      .lean();
+
+    const seenViewerIds = new Set(
+      viewersList.map((row) => (row.viewer?._id ? String(row.viewer._id) : '')).filter(Boolean)
+    );
+
+    const orphanLikeIds = [
+      ...new Set(likes.map((l) => String(l.viewer)).filter((vid) => vid && !seenViewerIds.has(vid))),
+    ];
+
+    if (orphanLikeIds.length > 0) {
+      const orphanOids = orphanLikeIds.map((x) => new mongoose.Types.ObjectId(x));
+      const orphanUsers = await User.find({ _id: { $in: orphanOids } })
+        .select('name username profileImage')
+        .lean();
+      const userById = new Map(orphanUsers.map((u) => [String(u._id), u]));
+      for (const l of likes) {
+        const vid = String(l.viewer);
+        if (seenViewerIds.has(vid)) continue;
+        const u = userById.get(vid);
+        if (!u) continue;
+        viewersList.push({
+          _id: l._id,
+          viewer: u,
+          viewedAt: l.createdAt,
+          duration: 0,
+          hasLiked: true,
+          emoji: l.emoji || '❤️',
+        });
+        seenViewerIds.add(vid);
+      }
+    }
+
+    viewersList.sort((a, b) => new Date(b.viewedAt) - new Date(a.viewedAt));
+
+    const fresh = await Story.findById(storyOid).select('viewCount likeCount').lean();
+
     res.status(200).json({
       success: true,
       data: {
         viewers: viewersList,
-        viewCount: story.viewCount ?? viewers.length,
+        viewCount: fresh?.viewCount ?? viewersList.length,
+        likeCount: fresh?.likeCount ?? likes.length,
       },
     });
   } catch (error) {

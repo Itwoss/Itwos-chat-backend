@@ -37,12 +37,16 @@ import searchRoutes from './routes/searchRoutes.js';
 import healthRoutes from './routes/healthRoutes.js';
 import profileLikeRoutes from './routes/profileLikeRoutes.js';
 import adminProfileLikeRoutes from './routes/adminProfileLikeRoutes.js';
+import fontRoutes from './routes/fontRoutes.js';
+import adminFontRoutes from './routes/adminFontRoutes.js';
+import adminProfileReportRoutes from './routes/adminProfileReportRoutes.js';
 import { authenticateSocket } from './middleware/socketAuth.js';
 import { authenticate, authorize, optionalAuthenticate } from './middleware/auth.js';
 import {
   postProfileLike,
   getProfileTotalLikes,
   getProfileLikeStatus,
+  getProfileLikers,
 } from './controllers/profileLikeController.js';
 import { addPostToProfile } from './controllers/postController.js';
 import { getOpenPostLandingHtml } from './controllers/openPostController.js';
@@ -190,11 +194,13 @@ app.use('/api/user/memories', memoryRoutes);
 // Profile likes — top-level routes (same pattern as add-to-profile) so POST/GET always hit before user router
 app.get('/api/user/profile/:id/likes', getProfileTotalLikes);
 app.get('/api/user/profile/:id/like-status', optionalAuthenticate, getProfileLikeStatus);
+app.get('/api/user/profile/:id/likers', getProfileLikers);
 app.post('/api/user/profile/:id/like', authenticate, postProfileLike);
 app.use('/api/user', userRoutes);
 app.use('/api/profile', profileLikeRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin', adminProfileLikeRoutes);
+app.use('/api/admin', adminProfileReportRoutes);
 app.use('/api/admin/users', adminUserRoutes);
 app.use('/api/admin/teams', adminTeamRoutes);
 app.use('/api/admin/bookings', adminBookingRoutes);
@@ -204,7 +210,9 @@ app.use('/api/admin/chat', adminChatRoutes);
 app.use('/api/admin/chat-themes', adminChatThemeRoutes);
 app.use('/api/admin/subscriptions', adminSubscriptionRoutes);
 app.use('/api/banners', bannerRoutes);
+app.use('/api/fonts', fontRoutes);
 app.use('/api/admin/banners', adminBannerRoutes);
+app.use('/api/admin/fonts', adminFontRoutes);
 app.use('/api/admin/stories', adminStoryRoutes);
 app.use('/api/admin/posts', adminPostRoutes);
 app.use('/api/music', musicRoutes);
@@ -501,6 +509,14 @@ const emitToAdminRoom = (notification) => {
   io.to('admin-room').emit('new-notification', notification);
 };
 
+/** Story owner: refetch viewers list when someone views or likes (real-time). */
+const emitStoryViewersUpdated = (ownerUserId, payload) => {
+  if (!ownerUserId || !payload?.storyId) return;
+  const uid = typeof ownerUserId === 'string' ? ownerUserId : ownerUserId.toString?.();
+  if (!uid) return;
+  io.to(`user:${uid}`).emit('story-viewers-updated', payload);
+};
+
 // Make io and presence available to controllers
 app.set('io', io);
 app.set('isUserConnected', (userId) => {
@@ -509,7 +525,7 @@ app.set('isUserConnected', (userId) => {
   return id ? connectedUsers.has(id) : false;
 });
 
-export { io, emitNotification, emitToAdminRoom };
+export { io, emitNotification, emitToAdminRoom, emitStoryViewersUpdated };
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log('Hi ITWOS');

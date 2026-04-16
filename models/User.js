@@ -14,10 +14,21 @@ const userSchema = new mongoose.Schema({
     trim: true,
     match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email']
   },
+  googleId: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true,
+  },
   password: {
     type: String,
-    required: [true, 'Password is required'],
-    minlength: [6, 'Password must be at least 6 characters']
+    required: [
+      function passwordRequired() {
+        return !this.googleId;
+      },
+      'Password is required',
+    ],
+    minlength: [6, 'Password must be at least 6 characters'],
   },
   role: {
     type: String,
@@ -26,18 +37,33 @@ const userSchema = new mongoose.Schema({
   },
   countryCode: {
     type: String,
-    required: [true, 'Country code is required'],
-    trim: true
+    required: [
+      function countryRequired() {
+        return !this.googleId;
+      },
+      'Country code is required',
+    ],
+    trim: true,
   },
   phoneNumber: {
     type: String,
-    required: [true, 'Phone number is required'],
-    trim: true
+    required: [
+      function phoneRequired() {
+        return !this.googleId;
+      },
+      'Phone number is required',
+    ],
+    trim: true,
   },
   fullNumber: {
     type: String,
-    required: [true, 'Full number is required'],
-    trim: true
+    required: [
+      function fullNumberRequired() {
+        return !this.googleId;
+      },
+      'Full number is required',
+    ],
+    trim: true,
   },
   isActive: {
     type: Boolean,
@@ -105,6 +131,15 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Banner',
     default: null
+  },
+  fontInventory: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Font',
+  }],
+  equippedFont: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Font',
+    default: null,
   },
   address: {
     street: {

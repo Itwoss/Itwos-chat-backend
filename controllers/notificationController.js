@@ -24,7 +24,8 @@ export const getUserNotifications = async (req, res) => {
     const notifications = await Notification.find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .populate('sender', 'name username profileImage subscription badgeType');
 
     const total = await Notification.countDocuments(query);
     const unreadCount = await Notification.countDocuments({ userId, isRead: false });
@@ -82,6 +83,38 @@ export const markAsRead = async (req, res) => {
   }
 };
 
+// Mark a single notification as unread
+export const markAsUnread = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const notification = await Notification.findOne({ _id: id, userId });
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found'
+      });
+    }
+
+    notification.isRead = false;
+    await notification.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Notification marked as unread',
+      data: notification
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to mark notification as unread',
+      error: error.message
+    });
+  }
+};
+
 // Mark all notifications as read
 export const markAllAsRead = async (req, res) => {
   try {
@@ -134,30 +167,47 @@ export const deleteNotification = async (req, res) => {
 };
 
 // Helper function to create notification (used by other controllers)
-export const createNotification = async (userId, type, title, message, projectId = null, meetingId = null, link = null) => {
+export const createNotification = async (
+  userId,
+  type,
+  title,
+  message,
+  projectId = null,
+  meetingId = null,
+  link = null,
+  senderId = null
+) => {
   try {
-    const notification = await Notification.create({
+    const payload = {
       userId,
       type,
       title,
       message,
       projectId,
       meetingId,
-      link
-    });
+      link,
+    };
+    if (senderId) {
+      payload.sender = senderId;
+    }
+    const notification = await Notification.create(payload);
+    const populated = await Notification.findById(notification._id).populate(
+      'sender',
+      'name username profileImage subscription badgeType'
+    );
 
     // Emit notification via Socket.IO
     try {
       // Use dynamic import to avoid circular dependency
       const serverModule = await import('../server.js');
       if (serverModule.emitNotification) {
-        serverModule.emitNotification(userId.toString(), notification);
+        serverModule.emitNotification(userId.toString(), populated);
       }
     } catch (error) {
       console.error('Error emitting notification:', error);
     }
 
-    return notification;
+    return populated;
   } catch (error) {
     console.error('Error creating notification:', error);
     return null;

@@ -8,8 +8,27 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['project_update', 'meeting_request', 'meeting_scheduled', 'note_added', 'status_change', 'milestone_completed', 'friend_request', 'message', 'banner_purchase'],
+    enum: [
+      'project_update',
+      'meeting_request',
+      'meeting_scheduled',
+      'note_added',
+      'status_change',
+      'milestone_completed',
+      'friend_request',
+      'message',
+      'banner_purchase',
+      'like',
+      'comment',
+      'trending',
+    ],
     required: true
+  },
+  /** User who triggered the notification (e.g. who liked the post), for client avatar/name */
+  sender: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
   },
   title: {
     type: String,

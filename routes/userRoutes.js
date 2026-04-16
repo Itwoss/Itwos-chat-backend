@@ -3,6 +3,7 @@ import { body } from 'express-validator';
 import {
   registerUser,
   loginUser,
+  loginWithGoogle,
   getCurrentUser,
   getUserById,
   logoutUser,
@@ -18,9 +19,12 @@ import { authenticate, authorize, optionalAuthenticate } from '../middleware/aut
 import { uploadSingle } from '../middleware/upload.js';
 import {
   postProfileLike,
+  deleteProfileLikeToday,
   getProfileTotalLikes,
   getProfileLikeStatus,
+  getProfileLikers,
 } from '../controllers/profileLikeController.js';
+import { createProfileReport } from '../controllers/profileReportController.js';
 
 const router = express.Router();
 
@@ -53,6 +57,12 @@ const loginValidation = [
     .isEmail().withMessage('Please provide a valid email'),
   body('password')
     .notEmpty().withMessage('Password is required')
+];
+
+const googleLoginValidation = [
+  body('idToken')
+    .trim()
+    .notEmpty().withMessage('Google idToken is required'),
 ];
 
 // Validation rules
@@ -88,6 +98,7 @@ const updateProfileValidation = [
 
 // Routes
 router.post('/register', registerValidation, registerUser);
+router.post('/login/google', googleLoginValidation, loginWithGoogle);
 router.post('/login', loginValidation, loginUser);
 router.get('/me', authenticate, authorize('user'), getCurrentUser);
 // Push notifications (specific paths before /:id)
@@ -98,7 +109,10 @@ router.post('/push-subscription/test', authenticate, authorize('user'), sendTest
 // Profile daily likes (must be before /:id so "profile" is never parsed as a user id)
 router.get('/profile/:id/likes', getProfileTotalLikes);
 router.get('/profile/:id/like-status', optionalAuthenticate, getProfileLikeStatus);
+router.get('/profile/:id/likers', getProfileLikers);
 router.post('/profile/:id/like', authenticate, postProfileLike);
+router.delete('/profile/:id/like', authenticate, deleteProfileLikeToday);
+router.post('/profile/:userId/report', authenticate, authorize('user'), createProfileReport);
 // Only match valid MongoDB ObjectId (24 hex chars) so paths like "client-projects" or "demo-bookings" are not treated as user IDs
 router.get('/:id([0-9a-fA-F]{24})', authenticate, authorize('user'), getUserById);
 router.post('/logout', authenticate, authorize('user'), logoutUser);
