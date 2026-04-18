@@ -249,7 +249,7 @@ export const getUserSuggestions = async (req, res) => {
       role: 'user',
       isActive: true
     })
-      .select('name email profileImage accountType onlineStatus lastSeen privacySettings subscription')
+      .select('name email profileImage bio accountType onlineStatus lastSeen privacySettings subscription')
       .limit(parseInt(limit))
       .sort({ createdAt: -1 })
       .lean(); // Use lean() for faster queries
