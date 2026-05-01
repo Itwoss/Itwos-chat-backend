@@ -53,6 +53,11 @@ const bannerSchema = new mongoose.Schema({
     trim: true,
     maxlength: [500, 'Description cannot exceed 500 characters'],
     default: ''
+  },
+  codeKey: {
+    type: String,
+    trim: true,
+    default: ''
   }
 }, {
   timestamps: true

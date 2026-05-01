@@ -5,9 +5,35 @@ import cloudinary from '../utils/cloudinary.js';
 import fs from 'fs';
 import mongoose from 'mongoose';
 
+const SECTION_ONE_CODE_KEY = 'hearts-love-section-1';
+const SECTION_ONE_PLACEHOLDER =
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="%233a0070"/><stop offset="100%" stop-color="%23080014"/></linearGradient></defs><rect width="100%" height="100%" fill="url(%23g)"/></svg>';
+
+const ensureSectionOneCodeBanner = async () => {
+  await Banner.findOneAndUpdate(
+    { codeKey: SECTION_ONE_CODE_KEY },
+    {
+      $setOnInsert: {
+        name: 'section-1',
+        imageUrl: SECTION_ONE_PLACEHOLDER,
+        price: 1,
+        rarity: 'Rare',
+        effect: 'none',
+        category: 'love',
+        stock: -1,
+        isActive: true,
+        description: 'Code based animated love banner.',
+        codeKey: SECTION_ONE_CODE_KEY,
+      },
+    },
+    { upsert: true, new: false }
+  );
+};
+
 // Get all banners (admin) with pagination
 export const getAllBannersAdmin = async (req, res) => {
   try {
+    await ensureSectionOneCodeBanner();
     const { category, rarity, isActive, page = 1, limit = 20 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -89,7 +115,20 @@ export const getBannerByIdAdmin = async (req, res) => {
 // Create banner (admin)
 export const createBanner = async (req, res) => {
   try {
-    const { name, price, rarity, effect, category, stock, isActive, description } = req.body;
+    const {
+      name,
+      price,
+      rarity,
+      effect,
+      category,
+      stock,
+      isActive,
+      description,
+      codeKey: rawCodeKey,
+      sourceType,
+    } = req.body;
+    const normalizedCodeKey = (rawCodeKey || '').toString().trim();
+    const isCodeBanner = sourceType === 'code' || normalizedCodeKey === SECTION_ONE_CODE_KEY;
     let imageUrl = req.body.imageUrl;
 
     // Validate required fields
@@ -123,11 +162,15 @@ export const createBanner = async (req, res) => {
       }
     }
 
-    if (!imageUrl) {
+    if (!imageUrl && !isCodeBanner) {
       return res.status(400).json({
         success: false,
         message: 'Image URL or file is required'
       });
+    }
+
+    if (isCodeBanner && !imageUrl) {
+      imageUrl = SECTION_ONE_PLACEHOLDER;
     }
 
     // Create banner
@@ -141,6 +184,7 @@ export const createBanner = async (req, res) => {
       stock: stock !== undefined ? parseInt(stock) : -1,
       isActive: isActive !== undefined ? isActive === 'true' : true,
       description: description || '',
+      codeKey: isCodeBanner ? SECTION_ONE_CODE_KEY : '',
       purchaseCount: 0
     });
 
@@ -167,7 +211,19 @@ export const createBanner = async (req, res) => {
 export const updateBanner = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, price, rarity, effect, category, stock, isActive, description } = req.body;
+    const {
+      name,
+      price,
+      rarity,
+      effect,
+      category,
+      stock,
+      isActive,
+      description,
+      codeKey: rawCodeKey,
+      sourceType,
+    } = req.body;
+    const normalizedCodeKey = (rawCodeKey || '').toString().trim();
     let imageUrl = req.body.imageUrl;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -186,8 +242,13 @@ export const updateBanner = async (req, res) => {
       });
     }
 
+    const isCodeBanner =
+      sourceType === 'code' ||
+      normalizedCodeKey === SECTION_ONE_CODE_KEY ||
+      banner.codeKey === SECTION_ONE_CODE_KEY;
+
     // Handle new image upload
-    if (req.file) {
+    if (req.file && !isCodeBanner) {
       try {
         // Delete old image from Cloudinary if exists
         if (banner.imageUrl) {
@@ -233,7 +294,13 @@ export const updateBanner = async (req, res) => {
     if (stock !== undefined) banner.stock = parseInt(stock);
     if (isActive !== undefined) banner.isActive = isActive === 'true';
     if (description !== undefined) banner.description = description;
-    if (imageUrl) banner.imageUrl = imageUrl;
+    if (isCodeBanner) {
+      banner.codeKey = SECTION_ONE_CODE_KEY;
+      banner.imageUrl = imageUrl || banner.imageUrl || SECTION_ONE_PLACEHOLDER;
+    } else {
+      banner.codeKey = '';
+      if (imageUrl) banner.imageUrl = imageUrl;
+    }
 
     await banner.save();
 

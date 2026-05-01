@@ -6,6 +6,36 @@ import { createOrder as createRazorpayOrder, verifyPaymentSignature, getPaymentD
 import { createNotification } from './notificationController.js';
 import { createAdminNotification } from './notificationController.js';
 
+const SECTION_ONE_CODE_KEY = 'hearts-love-section-1';
+const SECTION_ONE_PLACEHOLDER =
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="%233a0070"/><stop offset="100%" stop-color="%23080014"/></linearGradient></defs><rect width="100%" height="100%" fill="url(%23g)"/></svg>';
+
+const ensureSectionOneCodeBanner = async () => {
+  await Banner.findOneAndUpdate(
+    { codeKey: SECTION_ONE_CODE_KEY },
+    {
+      $setOnInsert: {
+        name: 'section-1',
+        imageUrl: SECTION_ONE_PLACEHOLDER,
+        price: 1,
+        rarity: 'Rare',
+        effect: 'none',
+        category: 'love',
+        stock: -1,
+        isActive: true,
+        description: 'Code based animated love banner.',
+        codeKey: SECTION_ONE_CODE_KEY,
+      },
+    },
+    { upsert: true, new: false }
+  );
+};
+
+const EQUIPPED_BANNER_POPULATE_FIELDS =
+  'name imageUrl profileImageUrl chatImageUrl postImageUrl profileVideoUrl chatVideoUrl postVideoUrl rarity effect category codeKey price description';
+const BANNER_INVENTORY_POPULATE_FIELDS =
+  'name imageUrl profileImageUrl chatImageUrl postImageUrl profileVideoUrl chatVideoUrl postVideoUrl price rarity effect category description codeKey';
+
 /** Global ownership check: user owns banner ONLY if verified BannerPayment exists. Do not trust user.bannerInventory. */
 const VERIFIED_STATUSES = ['verified', 'completed'];
 const hasVerifiedBannerPayment = async (userId, bannerId) => {
@@ -21,6 +51,7 @@ const hasVerifiedBannerPayment = async (userId, bannerId) => {
 // Get all active banners (public)
 export const getAllBanners = async (req, res) => {
   try {
+    await ensureSectionOneCodeBanner();
     const { category, rarity, minPrice, maxPrice, effect } = req.query;
 
     const query = { isActive: true };
@@ -108,7 +139,7 @@ export const getUserEquippedBanner = async (req, res) => {
     }
 
     const user = await User.findById(userId)
-      .populate('equippedBanner', 'name imageUrl rarity effect')
+      .populate('equippedBanner', EQUIPPED_BANNER_POPULATE_FIELDS)
       .select('equippedBanner')
       .lean();
 
@@ -161,8 +192,8 @@ export const getUserInventory = async (req, res) => {
       .then(ids => ids.map(id => id.toString()));
 
     const user = await User.findById(userId)
-      .populate('bannerInventory', 'name imageUrl price rarity effect category description')
-      .populate('equippedBanner', 'name imageUrl rarity effect')
+      .populate('bannerInventory', BANNER_INVENTORY_POPULATE_FIELDS)
+      .populate('equippedBanner', EQUIPPED_BANNER_POPULATE_FIELDS)
       .select('bannerInventory equippedBanner')
       .lean();
 
@@ -342,8 +373,8 @@ export const verifyBannerPayment = async (req, res) => {
     const existingBannerPayment = await BannerPayment.findOne({ razorpayPaymentId: paymentId });
     if (existingBannerPayment) {
       const updated = await User.findById(userId)
-        .populate('bannerInventory', 'name imageUrl price rarity effect category description')
-        .populate('equippedBanner', 'name imageUrl rarity effect')
+        .populate('bannerInventory', BANNER_INVENTORY_POPULATE_FIELDS)
+        .populate('equippedBanner', EQUIPPED_BANNER_POPULATE_FIELDS)
         .select('bannerInventory equippedBanner')
         .lean();
       return res.status(200).json({
@@ -413,8 +444,8 @@ export const verifyBannerPayment = async (req, res) => {
     }
 
     const updatedUser = await User.findById(userId)
-      .populate('bannerInventory', 'name imageUrl price rarity effect category description')
-      .populate('equippedBanner', 'name imageUrl rarity effect')
+      .populate('bannerInventory', BANNER_INVENTORY_POPULATE_FIELDS)
+      .populate('equippedBanner', EQUIPPED_BANNER_POPULATE_FIELDS)
       .select('bannerInventory equippedBanner')
       .lean();
 
@@ -533,8 +564,8 @@ export const claimFreeBanner = async (req, res) => {
     await banner.save();
 
     const updatedUser = await User.findById(userId)
-      .populate('bannerInventory', 'name imageUrl price rarity effect category description')
-      .populate('equippedBanner', 'name imageUrl rarity effect')
+      .populate('bannerInventory', BANNER_INVENTORY_POPULATE_FIELDS)
+      .populate('equippedBanner', EQUIPPED_BANNER_POPULATE_FIELDS)
       .select('bannerInventory equippedBanner')
       .lean();
 
@@ -592,7 +623,7 @@ export const equipBanner = async (req, res) => {
 
     // Populate and return
     const updatedUser = await User.findById(userId)
-      .populate('equippedBanner', 'name imageUrl rarity effect')
+      .populate('equippedBanner', EQUIPPED_BANNER_POPULATE_FIELDS)
       .select('equippedBanner')
       .lean();
 

@@ -154,9 +154,16 @@ export const createPost = async (req, res) => {
     if (files && files.length > 0) {
       for (const file of files) {
         try {
-          const isAudio = file.mimetype?.startsWith('audio/') ||
-            /\.(mp3|m4a|wav|ogg|aac|webm|mp4)$/i.test(file.originalname || '');
-          const isVideo = !isAudio && (file.mimetype?.startsWith('video/') || /\.(mp4|webm|mov|avi)$/i.test(file.originalname || ''));
+          const mime = String(file.mimetype || '').toLowerCase();
+          const baseName = file.originalname || '';
+          // Never treat common video extensions as audio: the old regex listed .mp4/.webm as "audio",
+          // so e.g. clip.mp4 was saved as post.song with post.video empty → blank feed cards.
+          const isVideoMime = mime.startsWith('video/');
+          const isAudioMime = mime.startsWith('audio/');
+          const hasVideoExt = /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(baseName);
+          const hasAudioExt = /\.(mp3|m4a|wav|ogg|aac|opus|flac)$/i.test(baseName);
+          const isVideo = isVideoMime || (hasVideoExt && !isAudioMime);
+          const isAudio = !isVideo && (isAudioMime || hasAudioExt);
           const folder = isAudio ? 'chat-app/posts/songs' : (isVideo ? 'chat-app/posts/videos' : 'chat-app/posts');
           const resourceType = isAudio ? 'video' : (isVideo ? 'video' : 'image'); // Cloudinary uses 'video' for audio
 
@@ -181,7 +188,9 @@ export const createPost = async (req, res) => {
           }
         } catch (uploadError) {
           console.error('Error uploading file:', uploadError);
-          if (file.mimetype?.startsWith('audio/') || /\.(mp3|m4a|wav|ogg|aac|webm)$/i.test(file.originalname || '')) {
+          const errMime = String(file.mimetype || '').toLowerCase();
+          const errName = file.originalname || '';
+          if (errMime.startsWith('audio/') || /\.(mp3|m4a|wav|ogg|aac|opus|flac)$/i.test(errName)) {
             console.error('[Post Controller] Audio upload failed – post.song will be null. Check Cloudinary config and file.', uploadError?.message || uploadError);
           }
         }
