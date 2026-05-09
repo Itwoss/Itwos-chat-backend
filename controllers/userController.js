@@ -505,7 +505,7 @@ export const loginWithGoogle = async (req, res) => {
       });
     }
 
-    const googleClientId = process.env.GOOGLE_CLIENT_ID;
+    const googleClientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
     if (!googleClientId) {
       return res.status(503).json({
         success: false,
@@ -513,20 +513,29 @@ export const loginWithGoogle = async (req, res) => {
       });
     }
 
+    // Accept ID tokens whose `aud` is any of these (same project: Web + optional extra Web client).
+    const extraAudiences = (process.env.GOOGLE_CLIENT_IDS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const audiences = [googleClientId, ...extraAudiences.filter((id) => id !== googleClientId)];
+
     const { idToken } = req.body;
     const client = new OAuth2Client(googleClientId);
     let payload;
     try {
       const ticket = await client.verifyIdToken({
         idToken,
-        audience: googleClientId,
+        audience: audiences.length === 1 ? audiences[0] : audiences,
       });
       payload = ticket.getPayload();
     } catch (verifyErr) {
       console.error('[Google login] Token verify failed:', verifyErr.message);
+      const verbose = process.env.AUTH_VERBOSE_LOG === 'true' || process.env.NODE_ENV === 'development';
+      const detail = verbose ? ` ${verifyErr.message}` : '';
       return res.status(401).json({
         success: false,
-        message: 'Invalid or expired Google sign-in. Please try again.',
+        message: `Invalid or expired Google sign-in. Please try again.${detail}`,
       });
     }
 

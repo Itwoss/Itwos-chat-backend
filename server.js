@@ -65,6 +65,7 @@ const allowedOrigins = [
   'https://app.itwos.store',
   // Capacitor native app (iOS uses capacitor://localhost; Android may use http(s)://localhost)
   'capacitor://localhost',
+  'ionic://localhost',
   'http://localhost',
   'https://localhost',
   process.env.FRONTEND_URL,
