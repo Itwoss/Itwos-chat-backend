@@ -453,6 +453,55 @@ io.on('connection', async (socket) => {
     });
   });
 
+  /** 1:1 call signaling (WhatsApp-style). Media runs on LiveKit; this only notifies the peer. */
+  const isDmRoomName = (name) =>
+    typeof name === 'string' && /^dm_[a-f0-9]{24}_[a-f0-9]{24}$/i.test(name.trim());
+
+  socket.on('call-invite', (data) => {
+    try {
+      const { peerUserId, roomName, callType, fromName } = data || {};
+      if (!peerUserId || !roomName || !isDmRoomName(roomName)) return;
+      io.to(`user:${peerUserId}`).emit('incoming-call', {
+        fromUserId: userIdStr,
+        fromName: fromName || 'Someone',
+        roomName: roomName.trim(),
+        callType: callType === 'audio' ? 'audio' : 'video',
+      });
+    } catch (e) {
+      console.error('call-invite error', e);
+    }
+  });
+
+  socket.on('call-cancel', (data) => {
+    try {
+      const { peerUserId, roomName } = data || {};
+      if (!peerUserId || !roomName || !isDmRoomName(roomName)) return;
+      io.to(`user:${peerUserId}`).emit('call-cancelled', { roomName: roomName.trim(), fromUserId: userIdStr });
+    } catch (e) {
+      console.error('call-cancel error', e);
+    }
+  });
+
+  socket.on('call-decline', (data) => {
+    try {
+      const { peerUserId, roomName } = data || {};
+      if (!peerUserId || !roomName || !isDmRoomName(roomName)) return;
+      io.to(`user:${peerUserId}`).emit('call-declined', { roomName: roomName.trim(), fromUserId: userIdStr });
+    } catch (e) {
+      console.error('call-decline error', e);
+    }
+  });
+
+  socket.on('call-end', (data) => {
+    try {
+      const { peerUserId, roomName } = data || {};
+      if (!peerUserId || !roomName || !isDmRoomName(roomName)) return;
+      io.to(`user:${peerUserId}`).emit('call-ended', { roomName: roomName.trim(), fromUserId: userIdStr });
+    } catch (e) {
+      console.error('call-end error', e);
+    }
+  });
+
   socket.on('join_profile', (data) => {
     const pid = data?.profileId;
     if (!pid || typeof pid !== 'string' || !/^[0-9a-fA-F]{24}$/.test(pid)) return;

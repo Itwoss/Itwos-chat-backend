@@ -24,6 +24,7 @@ import {
   toggleCloseFriend,
   createChatGroup,
 } from '../controllers/chatController.js';
+import { createLiveKitCallToken } from '../controllers/chatCallController.js';
 import { authenticate, authorize } from '../middleware/auth.js';
 import { uploadSingleMaybe } from '../middleware/upload.js';
 
@@ -59,6 +60,9 @@ router.put('/prefs/pin/:userId', togglePinChat);
 router.put('/prefs/mute/:userId', toggleMuteChat);
 router.put('/prefs/close-friend/:userId', toggleCloseFriend);
 router.post('/prefs/groups', createChatGroup);
+
+/** LiveKit JWT for 1:1 voice/video (body: { peerUserId, callType?: 'audio'|'video' }) */
+router.post('/call/token', createLiveKitCallToken);
 
 export default router;
 
