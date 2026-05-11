@@ -457,15 +457,30 @@ io.on('connection', async (socket) => {
   const isDmRoomName = (name) =>
     typeof name === 'string' && /^dm_[a-f0-9]{24}_[a-f0-9]{24}$/i.test(name.trim());
 
-  socket.on('call-invite', (data) => {
+  socket.on('call-invite', async (data) => {
     try {
-      const { peerUserId, roomName, callType, fromName } = data || {};
+      const { peerUserId, roomName, callType, fromName, fromAvatarUrl } = data || {};
       if (!peerUserId || !roomName || !isDmRoomName(roomName)) return;
+      let chatId = null;
+      try {
+        const Chat = (await import('./models/Chat.js')).default;
+        const c = await Chat.findOne({
+          participants: { $all: [userIdStr, peerUserId] },
+          isActive: true,
+        })
+          .select('_id')
+          .lean();
+        chatId = c?._id ? String(c._id) : null;
+      } catch (_) {
+        /* non-blocking */
+      }
       io.to(`user:${peerUserId}`).emit('incoming-call', {
         fromUserId: userIdStr,
         fromName: fromName || 'Someone',
+        fromAvatarUrl: typeof fromAvatarUrl === 'string' ? fromAvatarUrl : '',
         roomName: roomName.trim(),
         callType: callType === 'audio' ? 'audio' : 'video',
+        chatId,
       });
     } catch (e) {
       console.error('call-invite error', e);

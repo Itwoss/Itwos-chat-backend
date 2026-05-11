@@ -202,6 +202,12 @@ export const getUserChats = async (req, res) => {
           decryptedContent = '📷 Image';
         } else if (chat.lastMessage.messageType === 'file') {
           decryptedContent = '📎 File';
+        } else if (chat.lastMessage.messageType === 'call_log') {
+          const kind = chat.lastMessage.callLog?.callType === 'audio' ? 'Voice' : 'Video';
+          decryptedContent =
+            chat.lastMessage.callLog?.outcome === 'ended'
+              ? `📞 ${kind} call`
+              : `📞 ${kind} call`;
         }
       }
       
@@ -255,7 +261,7 @@ export const getChatMessages = async (req, res) => {
         { $or: [{ sender: userId }, { receiver: userId }] }
       ]
     })
-      .select('sender receiver content messageType attachments sharedPost status isRead readAt deliveredAt isEncrypted createdAt isDeleted deletedForEveryone replyTo')
+      .select('sender receiver content messageType attachments sharedPost callLog status isRead readAt deliveredAt isEncrypted createdAt isDeleted deletedForEveryone replyTo')
       .populate('sender', 'name email profileImage')
       .populate('receiver', 'name email profileImage')
       .populate({ path: 'replyTo', select: 'content sender messageType isDeleted deletedForEveryone', populate: { path: 'sender', select: 'name' } })
@@ -285,7 +291,7 @@ export const getChatMessages = async (req, res) => {
         }
         msg.replyTo.content = sanitizeContent(msg.replyTo.content);
       }
-      if (msg.messageType !== 'post_share' && msg.isEncrypted && msg.content) {
+      if (msg.messageType !== 'post_share' && msg.messageType !== 'call_log' && msg.isEncrypted && msg.content) {
         try {
           msg.content = decryptMessage(msg.content);
         } catch (_err) {
@@ -293,7 +299,7 @@ export const getChatMessages = async (req, res) => {
           msg.content = '[Message could not be decrypted]';
         }
       }
-      if (msg.messageType !== 'post_share') {
+      if (msg.messageType !== 'post_share' && msg.messageType !== 'call_log') {
         msg.content = sanitizeContent(msg.content);
       }
       return msg;
@@ -379,6 +385,123 @@ function parseSharedPostNested(body) {
   }
   return typeof sp === 'object' && sp !== null && !Array.isArray(sp) ? sp : null;
 }
+
+/** Persist a 1:1 voice/video call row in the chat thread (both participants see it). */
+export const createCallLogMessage = async (req, res) => {
+  try {
+    const me = String(req.user._id);
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const chatId = normalizeIdInput(body.chatId);
+    const roomName = typeof body.roomName === 'string' ? body.roomName.trim() : '';
+    const initiatorUserId = normalizeIdInput(body.initiatorUserId);
+    const outcome =
+      body.outcome === 'ended' || body.outcome === 'cancelled' || body.outcome === 'declined'
+        ? body.outcome
+        : null;
+    const callType = body.callType === 'audio' ? 'audio' : 'video';
+    const durationSec = Math.min(86400, Math.max(0, parseInt(String(body.durationSec ?? '0'), 10) || 0));
+
+    if (!chatId || !roomName || !initiatorUserId || !outcome) {
+      return res.status(400).json({
+        success: false,
+        message: 'chatId, roomName, initiatorUserId, and outcome are required',
+      });
+    }
+    if (!mongoose.Types.ObjectId.isValid(chatId) || !mongoose.Types.ObjectId.isValid(initiatorUserId)) {
+      return res.status(400).json({ success: false, message: 'Invalid id' });
+    }
+
+    const chat = await Chat.findById(chatId).select('participants isActive').lean();
+    if (!chat?.isActive || !chat.participants?.some((p) => String(p) === me)) {
+      return res.status(403).json({ success: false, message: 'Not allowed' });
+    }
+    const pids = chat.participants.map((p) => String(p)).sort();
+    if (!pids.includes(String(initiatorUserId))) {
+      return res.status(400).json({ success: false, message: 'Initiator not in chat' });
+    }
+    const expectedRoom = `dm_${pids[0]}_${pids[1]}`;
+    if (roomName !== expectedRoom) {
+      return res.status(400).json({ success: false, message: 'Room does not match chat' });
+    }
+
+    const windowMs = outcome === 'ended' ? 120000 : 60000;
+    const windowStart = new Date(Date.now() - windowMs);
+    const dup = await Message.findOne({
+      chatId,
+      messageType: 'call_log',
+      'callLog.roomName': roomName,
+      'callLog.outcome': outcome,
+      createdAt: { $gte: windowStart },
+    })
+      .select('_id')
+      .lean();
+    if (dup) {
+      const existing = await Message.findById(dup._id)
+        .populate('sender', 'name email profileImage profilePicture')
+        .populate('receiver', 'name email profileImage profilePicture')
+        .lean();
+      return res.status(200).json({ success: true, data: { message: existing, duplicate: true } });
+    }
+
+    const receiverId = chat.participants.find((p) => String(p) !== String(initiatorUserId));
+    if (!receiverId) {
+      return res.status(400).json({ success: false, message: 'Invalid chat participants' });
+    }
+
+    const messagePayload = {
+      chatId,
+      sender: initiatorUserId,
+      receiver: receiverId,
+      content: '📞 Call',
+      messageType: 'call_log',
+      isEncrypted: false,
+      status: 'sent',
+      callLog: {
+        roomName,
+        callType,
+        outcome,
+        durationSec: outcome === 'ended' ? durationSec : 0,
+      },
+    };
+
+    const message = await Message.create(messagePayload);
+    await Chat.updateOne(
+      { _id: chatId },
+      {
+        lastMessage: message._id,
+        lastMessageAt: new Date(),
+      }
+    );
+
+    const populatedMessage = await Message.findById(message._id)
+      .populate('sender', 'name email profileImage profilePicture')
+      .populate('receiver', 'name email profileImage profilePicture')
+      .lean();
+
+    try {
+      const io = req.app?.get('io');
+      if (io) {
+        for (const uid of pids) {
+          io.to(`user:${uid}`).emit('new-message', {
+            chatId,
+            message: { ...populatedMessage, status: 'sent' },
+            senderId: String(initiatorUserId),
+          });
+        }
+      }
+    } catch (emitErr) {
+      console.warn('[createCallLogMessage] socket emit failed:', emitErr?.message);
+    }
+
+    return res.status(201).json({ success: true, data: { message: populatedMessage } });
+  } catch (err) {
+    console.error('[createCallLogMessage]', err);
+    return res.status(500).json({
+      success: false,
+      message: err?.message || 'Failed to save call log',
+    });
+  }
+};
 
 // Send message
 export const sendMessage = async (req, res) => {

@@ -23,8 +23,17 @@ const messageSchema = new mongoose.Schema({
   },
   messageType: {
     type: String,
-    enum: ['text', 'image', 'file', 'audio', 'post_share'],
+    enum: ['text', 'image', 'file', 'audio', 'post_share', 'call_log'],
     default: 'text'
+  },
+  callLog: {
+    roomName: { type: String, trim: true, default: '' },
+    callType: { type: String, enum: ['audio', 'video'], default: 'video' },
+    outcome: {
+      type: String,
+      enum: ['ended', 'cancelled', 'declined'],
+    },
+    durationSec: { type: Number, default: 0, min: 0 },
   },
   sharedPost: {
     postId: { type: mongoose.Schema.Types.ObjectId, ref: 'Post' },

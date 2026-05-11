@@ -3,6 +3,7 @@ import {
   getOrCreateChat,
   getUserChats,
   getChatMessages,
+  createCallLogMessage,
   sendMessage,
   deleteMessage,
   markMessagesAsRead,
@@ -38,6 +39,7 @@ router.use(authorize('user'));
 router.get('/chats', getUserChats);
 router.get('/chat/:userId', getOrCreateChat);
 router.get('/chat/:chatId/messages', getChatMessages);
+router.post('/chat/call-log', createCallLogMessage);
 router.post('/message', uploadSingleMaybe, sendMessage);
 router.delete('/message/:messageId', deleteMessage);
 router.get('/chat-themes', getChatThemes);
