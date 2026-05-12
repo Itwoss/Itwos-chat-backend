@@ -1,5 +1,5 @@
 import Memory from '../models/Memory.js';
-import cloudinary from '../utils/cloudinary.js';
+import { uploadMediaFromPath } from '../utils/mediaStorage.js';
 import fs from 'fs';
 
 /** Multer `fields` usually returns an array; normalize a single file object. */
@@ -43,16 +43,20 @@ export const createMemory = async (req, res) => {
 
     const imageUrls = [];
     for (const file of files) {
-      if (!file.mimetype.startsWith('image/')) continue;
       try {
-        const result = await cloudinary.uploader.upload(file.path, {
+        const isImage = file?.mimetype && file.mimetype.startsWith('image/');
+        if (!isImage) continue;
+        const result = await uploadMediaFromPath(file.path, {
           folder: 'chat-app/memories',
           resource_type: 'image',
+          contentType: file.mimetype,
+          originalFilename: file.originalname,
         });
         imageUrls.push(result.secure_url);
-        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
       } catch (e) {
         console.error('Error uploading memory image:', e);
+      } finally {
+        if (file?.path) await fs.promises.unlink(file.path).catch(() => {});
       }
     }
 
@@ -164,16 +168,20 @@ export const updateMemory = async (req, res) => {
     if (files.length > 0) {
       const newUrls = [];
       for (const file of files) {
-        if (!file.mimetype.startsWith('image/')) continue;
         try {
-          const result = await cloudinary.uploader.upload(file.path, {
+          const isImage = file?.mimetype && file.mimetype.startsWith('image/');
+          if (!isImage) continue;
+          const result = await uploadMediaFromPath(file.path, {
             folder: 'chat-app/memories',
             resource_type: 'image',
+            contentType: file.mimetype,
+            originalFilename: file.originalname,
           });
           newUrls.push(result.secure_url);
-          if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
         } catch (e) {
           console.error('Error uploading memory image:', e);
+        } finally {
+          if (file?.path) await fs.promises.unlink(file.path).catch(() => {});
         }
       }
       if (newUrls.length) memory.images = [...memory.images, ...newUrls];

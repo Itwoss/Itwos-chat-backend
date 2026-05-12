@@ -25,11 +25,11 @@ const projectSchema = new mongoose.Schema({
     ref: 'Team'
   }],
   images: [{
-    type: String, // Cloudinary URLs
+    type: String, // HTTPS URLs (e.g. R2)
     trim: true
   }],
   files: [{
-    type: String, // Cloudinary URLs
+    type: String, // HTTPS URLs (e.g. R2)
     trim: true
   }],
   isActive: {

@@ -3,7 +3,7 @@ import PostAddition from '../models/PostAddition.js';
 import User from '../models/User.js';
 import FriendRequest from '../models/FriendRequest.js';
 import { validationResult } from 'express-validator';
-import cloudinary from '../utils/cloudinary.js';
+import { uploadMediaFromPath, deleteStoredMediaUrl } from '../utils/mediaStorage.js';
 import fs from 'fs';
 import mongoose from 'mongoose';
 import { addCount } from '../services/countService.js';
@@ -18,6 +18,58 @@ const TRENDING_NOTIF_MESSAGE =
   '🎉 Your post is now trending worldwide! Enhance it by updating the thumbnail and adding a catchy one-line title.';
 const TRENDING_NOTIF_TITLE = 'Trending worldwide';
 const TRENDING_NOTIF_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Bounded public discovery:
+// Older code loaded *all* public users into memory and then queried posts via $in.
+// To keep discovery without unbounded user scans, we sample recent public authors
+// based on *recent posts only* (and cache the result for a short TTL).
+const PUBLIC_DISCOVERY_LOOKBACK_DAYS = 14;
+const PUBLIC_DISCOVERY_MAX_AUTHORS_FOR_FEED = 200;
+const PUBLIC_DISCOVERY_CACHE_TTL_MS = 2 * 60 * 1000;
+let publicDiscoveryAuthorCache = { atMs: 0, authorIds: [] };
+
+async function getBoundedPublicAuthorIds() {
+  const nowMs = Date.now();
+  if (publicDiscoveryAuthorCache.authorIds?.length && nowMs - publicDiscoveryAuthorCache.atMs < PUBLIC_DISCOVERY_CACHE_TTL_MS) {
+    return publicDiscoveryAuthorCache.authorIds;
+  }
+
+  const cutoff = new Date(nowMs - PUBLIC_DISCOVERY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+
+  // Pick recent public authors from recent posts (no full scan of all public users).
+  const rows = await Post.aggregate([
+    {
+      $match: {
+        isRemoved: { $ne: true },
+        createdAt: { $gte: cutoff },
+      },
+    },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'author',
+        foreignField: '_id',
+        as: 'authorDoc',
+      },
+    },
+    { $unwind: '$authorDoc' },
+    { $match: { 'authorDoc.accountType': 'public' } },
+    { $sort: { createdAt: -1 } },
+    {
+      $group: {
+        _id: '$author',
+        lastCreatedAt: { $first: '$createdAt' },
+      },
+    },
+    { $sort: { lastCreatedAt: -1 } },
+    { $limit: PUBLIC_DISCOVERY_MAX_AUTHORS_FOR_FEED },
+    { $project: { _id: 1 } },
+  ]);
+
+  const authorIds = (rows || []).map((r) => r?._id).filter(Boolean).map((oid) => String(oid));
+  publicDiscoveryAuthorCache = { atMs: nowMs, authorIds };
+  return authorIds;
+}
 
 /**
  * When a post appears in any trending list and was not on the previous snapshot, notify the author once
@@ -132,22 +184,25 @@ export const createPost = async (req, res) => {
       });
     }
 
-    // Upload images, song, and video to Cloudinary if any
+    // Upload images, song, and video to R2 if any
     const imageUrls = [];
     let songUrl = null;
     let videoUrl = null;
     let videoThumbnailUrl = null;
 
-    if (thumbnailFile) {
+    if (thumbnailFile?.path) {
       try {
-        const result = await cloudinary.uploader.upload(thumbnailFile.path, {
+        const result = await uploadMediaFromPath(thumbnailFile.path, {
           folder: 'chat-app/posts/thumbnails',
           resource_type: 'image',
+          contentType: thumbnailFile.mimetype,
+          originalFilename: thumbnailFile.originalname,
         });
         videoThumbnailUrl = result.secure_url;
-        if (fs.existsSync(thumbnailFile.path)) fs.unlinkSync(thumbnailFile.path);
       } catch (e) {
         console.error('Error uploading video thumbnail:', e);
+      } finally {
+        await fs.promises.unlink(thumbnailFile.path).catch(() => {});
       }
     }
 
@@ -165,11 +220,13 @@ export const createPost = async (req, res) => {
           const isVideo = isVideoMime || (hasVideoExt && !isAudioMime);
           const isAudio = !isVideo && (isAudioMime || hasAudioExt);
           const folder = isAudio ? 'chat-app/posts/songs' : (isVideo ? 'chat-app/posts/videos' : 'chat-app/posts');
-          const resourceType = isAudio ? 'video' : (isVideo ? 'video' : 'image'); // Cloudinary uses 'video' for audio
+          const resourceType = isAudio ? 'video' : (isVideo ? 'video' : 'image'); // folder routing; R2 uses file MIME
 
-          const result = await cloudinary.uploader.upload(file.path, {
+          const result = await uploadMediaFromPath(file.path, {
             folder,
             resource_type: resourceType,
+            contentType: file.mimetype,
+            originalFilename: file.originalname,
           });
 
           if (isAudio) {
@@ -182,17 +239,15 @@ export const createPost = async (req, res) => {
           } else {
             imageUrls.push(result.secure_url);
           }
-
-          if (fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
-          }
         } catch (uploadError) {
           console.error('Error uploading file:', uploadError);
           const errMime = String(file.mimetype || '').toLowerCase();
           const errName = file.originalname || '';
           if (errMime.startsWith('audio/') || /\.(mp3|m4a|wav|ogg|aac|opus|flac)$/i.test(errName)) {
-            console.error('[Post Controller] Audio upload failed – post.song will be null. Check Cloudinary config and file.', uploadError?.message || uploadError);
+            console.error('[Post Controller] Audio upload failed – post.song will be null. Check R2 config and file.', uploadError?.message || uploadError);
           }
+        } finally {
+          if (file?.path) await fs.promises.unlink(file.path).catch(() => {});
         }
       }
     }
@@ -320,13 +375,97 @@ export const createPost = async (req, res) => {
   }
 };
 
-const FEED_POST_POPULATE = [
+/** Feed list: avoid populating likes/comments (large arrays); counts are projected in slimFeedPostForViewer. */
+const FEED_POST_POPULATE_LIGHT = [
   { path: 'author', select: 'name email profileImage accountType subscription' },
   { path: 'mentions', select: 'name profileImage subscription' },
+];
+
+const FEED_POST_POPULATE = [
+  ...FEED_POST_POPULATE_LIGHT,
   { path: 'likes', select: 'name profileImage subscription' },
   { path: 'comments.user', select: 'name profileImage subscription' },
   { path: 'comments.mentions', select: 'name profileImage subscription' },
 ];
+
+function encodeFeedCursor(payload) {
+  try {
+    return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  } catch {
+    return null;
+  }
+}
+
+function decodeFeedCursor(cursorParam) {
+  if (!cursorParam || typeof cursorParam !== 'string') return null;
+  try {
+    const obj = JSON.parse(Buffer.from(cursorParam.trim(), 'base64url').toString('utf8'));
+    if (!obj || typeof obj !== 'object' || obj.v !== 1) return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
+function feedWatermarkMin(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  if (a.t !== b.t) return a.t < b.t ? a : b;
+  return String(a.id) < String(b.id) ? a : b;
+}
+
+/** Strictly older than watermark (descending timeline pagination). */
+function mongoLtChain(timeField, idField, watermark) {
+  if (!watermark || watermark.t == null || watermark.id == null) return null;
+  const d = new Date(Number(watermark.t));
+  if (Number.isNaN(d.getTime())) return null;
+  let oid;
+  try {
+    oid = new mongoose.Types.ObjectId(String(watermark.id));
+  } catch {
+    return null;
+  }
+  return {
+    $or: [
+      { [timeField]: { $lt: d } },
+      { $and: [{ [timeField]: d }, { [idField]: { $lt: oid } }] },
+    ],
+  };
+}
+
+function slimFeedPostForViewer(postLean, viewerIdStr) {
+  const likesArr = postLean.likes || [];
+  const likedByViewer = likesArr.some((id) => {
+    const sid =
+      id && typeof id === 'object' && id._id != null
+        ? id._id.toString()
+        : String(id);
+    return sid === viewerIdStr;
+  });
+  const commentedByViewer = Array.isArray(postLean.comments)
+    ? postLean.comments.some((c) => {
+        const uid =
+          c?.user?._id != null
+            ? c.user._id
+            : c?.user != null
+              ? c.user
+              : null
+        return uid != null && String(uid) === viewerIdStr;
+      })
+    : false;
+  const commentCount = Array.isArray(postLean.comments) ? postLean.comments.length : 0;
+  const likeCount = likesArr.length;
+  const { comments, likes, ...rest } = postLean;
+  return {
+    ...rest,
+    likes: [],
+    likedByViewer,
+    commentedByViewer,
+    likeCount,
+    comments: [],
+    commentCount,
+  };
+}
 
 function postAuthorVisibleInFeed(viewerIdStr, postDoc, allAuthorIdsSet) {
   if (!postDoc || postDoc.isRemoved) return false;
@@ -344,100 +483,189 @@ function feedSortTimeMs(item) {
   return new Date(item.createdAt || 0).getTime();
 }
 
-// Get feed posts (posts from friends, following, and public accounts) + "added" reposts
+// Get feed posts (self + friends + following) + "added" reposts. Cursor-based by default; offset `page>1` kept for older clients.
 export const getFeed = async (req, res) => {
   try {
     const userId = req.user._id;
     const viewerIdStr = userId.toString();
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, cursor: cursorParam } = req.query;
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
     const skip = (pageNum - 1) * limitNum;
+    const cursorDecoded = decodeFeedCursor(typeof cursorParam === 'string' ? cursorParam : '');
 
-    // Get user's friends (mutual follows - status 'accepted')
     const friendships = await FriendRequest.find({
       $or: [
         { fromUser: userId, status: 'accepted' },
-        { toUser: userId, status: 'accepted' }
-      ]
+        { toUser: userId, status: 'accepted' },
+      ],
     })
       .select('fromUser toUser')
       .lean();
 
     const friendIds = new Set();
-    friendships.forEach(fr => {
-      const friendId = fr.fromUser.toString() === userId.toString()
-        ? fr.toUser.toString()
-        : fr.fromUser.toString();
+    friendships.forEach((fr) => {
+      const friendId =
+        fr.fromUser.toString() === userId.toString()
+          ? fr.toUser.toString()
+          : fr.fromUser.toString();
       friendIds.add(friendId);
     });
 
-    // Get one-way following (users you follow - status 'following')
     const followingRecords = await FriendRequest.find({
       fromUser: userId,
-      status: 'following'
+      status: 'following',
     })
       .select('toUser')
       .lean();
-    const followingIds = new Set(followingRecords.map(fr => fr.toUser.toString()));
+    const followingIds = new Set(followingRecords.map((fr) => fr.toUser.toString()));
 
-    // Combine friends + following (no duplicates)
     const followedAndFriendIds = new Set([...friendIds, ...followingIds]);
+    const publicAuthorIds = await getBoundedPublicAuthorIds();
+    const publicAuthorObjectIds = (publicAuthorIds || [])
+      .filter((id) => mongoose.Types.ObjectId.isValid(String(id)))
+      .map((id) => new mongoose.Types.ObjectId(String(id)));
 
-    // Get public account IDs (excluding already followed/friends and self)
-    const excludeIds = [viewerIdStr, ...Array.from(followedAndFriendIds)];
-    const publicUsers = await User.find({
-      accountType: 'public',
-      _id: { $nin: excludeIds.map(id => new mongoose.Types.ObjectId(id)) }
-    }).select('_id').lean();
-    const publicUserIds = publicUsers.map(u => u._id.toString());
-
-    // Build query: posts from self, friends, following, OR public accounts
-    const allAuthorIds = new Set([
+    const allAuthorIdsSet = new Set([
       viewerIdStr,
       ...Array.from(followedAndFriendIds),
-      ...publicUserIds
+      ...publicAuthorObjectIds.map((oid) => oid.toString()),
     ]);
-    const allAuthorIdsSet = allAuthorIds;
-    const authorObjectIds = Array.from(allAuthorIds).map((id) => new mongoose.Types.ObjectId(id));
 
-    const query = {
-      author: { $in: authorObjectIds },
-      isRemoved: { $ne: true }
-    };
+    const circleObjectIds = [
+      new mongoose.Types.ObjectId(viewerIdStr),
+      ...Array.from(followedAndFriendIds).map((id) => new mongoose.Types.ObjectId(id)),
+      ...publicAuthorObjectIds,
+    ];
+    const circleObjectIdsUnique = [...new Set(circleObjectIds.map((oid) => oid.toString()))].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
 
     const friendObjectIds = Array.from(friendIds).map((id) => new mongoose.Types.ObjectId(id));
     const additionQuery = {
       $or: [
         { visibility: 'public' },
-        ...(friendObjectIds.length ? [{ visibility: 'friends', adder: { $in: friendObjectIds } }] : [])
-      ]
+        ...(friendObjectIds.length ? [{ visibility: 'friends', adder: { $in: friendObjectIds } }] : []),
+      ],
     };
 
-    const fetchCap = Math.min(250, skip + limitNum);
+    const usesOffsetPagination = pageNum > 1 && !cursorParam;
 
-    const [rawPosts, rawAdditions, postTotal, additionTotal] = await Promise.all([
-      Post.find(query)
-        .populate(FEED_POST_POPULATE)
-        .sort({ createdAt: -1 })
-        .limit(fetchCap)
+    if (usesOffsetPagination) {
+      const query = { author: { $in: circleObjectIdsUnique }, isRemoved: { $ne: true } };
+      const fetchCap = Math.min(600, skip + limitNum * 4);
+      const [rawPosts, rawAdditions, postTotal, additionTotal] = await Promise.all([
+        Post.find(query)
+          .populate(FEED_POST_POPULATE_LIGHT)
+          .sort({ createdAt: -1 })
+          .limit(fetchCap)
+          .lean(),
+        PostAddition.find(additionQuery)
+          .populate({ path: 'post', populate: FEED_POST_POPULATE_LIGHT })
+          .populate({ path: 'adder', select: 'name email profileImage accountType subscription' })
+          .sort({ addedAt: -1 })
+          .limit(fetchCap)
+          .lean(),
+        Post.countDocuments(query),
+        PostAddition.countDocuments(additionQuery),
+      ]);
+
+      const postItems = rawPosts
+        .filter((p) => p && p._id)
+        .map((p) => ({ ...p, _feedItemId: p._id.toString() }));
+
+      const additionItems = [];
+      for (const a of rawAdditions) {
+        const p = a.post;
+        if (!p || p.isRemoved) continue;
+        if (!postAuthorVisibleInFeed(viewerIdStr, p, allAuthorIdsSet)) continue;
+        additionItems.push({
+          ...p,
+          _feedItemId: a._id.toString(),
+          addedBy: a.adder,
+          addedAt: a.addedAt,
+          addVisibility: a.visibility,
+        });
+      }
+
+      const merged = [...postItems, ...additionItems].sort(
+        (x, y) => feedSortTimeMs(y) - feedSortTimeMs(x)
+      );
+
+      const byPostId = new Map();
+      for (const item of merged) {
+        const pid = item._id && item._id.toString();
+        if (!pid) continue;
+        const cur = byPostId.get(pid);
+        if (!cur) {
+          byPostId.set(pid, item);
+          continue;
+        }
+        if (item.addedBy && !cur.addedBy) {
+          byPostId.set(pid, item);
+          continue;
+        }
+        if (!item.addedBy && cur.addedBy) continue;
+        if (feedSortTimeMs(item) > feedSortTimeMs(cur)) byPostId.set(pid, item);
+      }
+      const deduped = [...byPostId.values()].sort((a, b) => feedSortTimeMs(b) - feedSortTimeMs(a));
+
+      const pageItems = deduped.slice(skip, skip + limitNum);
+      const totalApprox = postTotal + additionTotal;
+      const pages = Math.max(1, Math.ceil(totalApprox / limitNum));
+      const slimData = pageItems.map((p) => slimFeedPostForViewer(p, viewerIdStr));
+
+      return res.status(200).json({
+        success: true,
+        data: slimData,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: totalApprox,
+          pages,
+          hasMore: pageNum < pages,
+          nextCursor: null,
+        },
+      });
+    }
+
+    const fetchBatch = Math.min(200, limitNum * 5);
+    const hideFromCursor = Array.isArray(cursorDecoded?.hide)
+      ? cursorDecoded.hide.filter((id) => mongoose.Types.ObjectId.isValid(String(id))).slice(-60)
+      : [];
+    const hideUnique = [...new Set(hideFromCursor.map((id) => String(id)))];
+    const hideObjectIds = hideUnique.map((id) => new mongoose.Types.ObjectId(id));
+
+    const postLt = mongoLtChain('createdAt', '_id', cursorDecoded?.post);
+    const addLt = mongoLtChain('addedAt', '_id', cursorDecoded?.add);
+
+    const postBase = { author: { $in: circleObjectIdsUnique }, isRemoved: { $ne: true } };
+    const postParts = [postBase];
+    if (hideObjectIds.length) postParts.push({ _id: { $nin: hideObjectIds } });
+    if (postLt) postParts.push(postLt);
+    const postFilter = postParts.length === 1 ? postBase : { $and: postParts };
+
+    const addParts = [additionQuery];
+    if (addLt) addParts.push(addLt);
+    const additionFilter = addParts.length === 1 ? additionQuery : { $and: addParts };
+
+    const [rawPosts, rawAdditions] = await Promise.all([
+      Post.find(postFilter)
+        .populate(FEED_POST_POPULATE_LIGHT)
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(fetchBatch)
         .lean(),
-      PostAddition.find(additionQuery)
-        .populate({ path: 'post', populate: FEED_POST_POPULATE })
+      PostAddition.find(additionFilter)
+        .populate({ path: 'post', populate: FEED_POST_POPULATE_LIGHT })
         .populate({ path: 'adder', select: 'name email profileImage accountType subscription' })
-        .sort({ addedAt: -1 })
-        .limit(fetchCap)
+        .sort({ addedAt: -1, _id: -1 })
+        .limit(fetchBatch)
         .lean(),
-      Post.countDocuments(query),
-      PostAddition.countDocuments(additionQuery)
     ]);
 
     const postItems = rawPosts
       .filter((p) => p && p._id)
-      .map((p) => ({
-        ...p,
-        _feedItemId: p._id.toString(),
-      }));
+      .map((p) => ({ ...p, _feedItemId: p._id.toString() }));
 
     const additionItems = [];
     for (const a of rawAdditions) {
@@ -475,24 +703,55 @@ export const getFeed = async (req, res) => {
     }
     const deduped = [...byPostId.values()].sort((a, b) => feedSortTimeMs(b) - feedSortTimeMs(a));
 
-    const pageItems = deduped.slice(skip, skip + limitNum);
-    const totalApprox = postTotal + additionTotal;
+    const pageItems = deduped.slice(0, limitNum);
+
+    const newHideIds = [
+      ...hideUnique,
+      ...pageItems.filter((i) => i.addedBy).map((i) => i._id.toString()),
+    ].slice(-60);
+
+    let nextPostWm = cursorDecoded?.post || null;
+    for (const item of pageItems) {
+      if (item.addedBy) continue;
+      const t = new Date(item.createdAt).getTime();
+      nextPostWm = feedWatermarkMin(nextPostWm, { t, id: item._id.toString() });
+    }
+
+    let nextAddWm = cursorDecoded?.add || null;
+    for (const item of pageItems) {
+      if (!item.addedBy) continue;
+      const t = new Date(item.addedAt).getTime();
+      nextAddWm = feedWatermarkMin(nextAddWm, { t, id: String(item._feedItemId) });
+    }
+
+    const hasMore =
+      pageItems.length === limitNum &&
+      (rawPosts.length === fetchBatch || rawAdditions.length === fetchBatch);
+
+    const nextCursor =
+      hasMore && (nextPostWm || nextAddWm || newHideIds.length)
+        ? encodeFeedCursor({ v: 1, post: nextPostWm, add: nextAddWm, hide: newHideIds })
+        : null;
+
+    const slimData = pageItems.map((p) => slimFeedPostForViewer(p, viewerIdStr));
 
     res.status(200).json({
       success: true,
-      data: pageItems,
+      data: slimData,
       pagination: {
-        page: pageNum,
+        page: 1,
         limit: limitNum,
-        total: totalApprox,
-        pages: Math.max(1, Math.ceil(totalApprox / limitNum))
-      }
+        hasMore: !!hasMore,
+        nextCursor,
+        total: null,
+        pages: hasMore ? 2 : 1,
+      },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch feed',
-      error: error.message
+      error: error.message,
     });
   }
 };
@@ -504,26 +763,33 @@ const SEVEN_DAYS_MS = 7 * ONE_DAY_MS;
 
 const baseQuery = { isRemoved: { $ne: true } };
 
+let trendingSectionsCache = { atMs: 0, body: null };
+const TRENDING_SECTIONS_TTL_MS = 3 * 60 * 1000;
+
 export const getTrendingSections = async (req, res) => {
   try {
+    const nowMs = Date.now();
+    if (
+      trendingSectionsCache.body &&
+      nowMs - trendingSectionsCache.atMs < TRENDING_SECTIONS_TTL_MS
+    ) {
+      return res.status(200).json(trendingSectionsCache.body);
+    }
+
     const now = new Date();
     const oneDayAgo = new Date(now.getTime() - ONE_DAY_MS);
     const sevenDaysAgo = new Date(now.getTime() - SEVEN_DAYS_MS);
 
-    const populateAuthor = [
-      { path: 'author', select: 'name email profileImage accountType subscription' },
-      { path: 'likes', select: 'name profileImage subscription' },
-      { path: 'comments.user', select: 'name profileImage subscription' },
-    ];
+    // Keep trending payload slim: UI only needs thumbs + likeCount/viewCount.
+    // We compute like/comment counts via array lengths; no need to populate likes/comments.user.
+    const populateAuthor = { path: 'author', select: 'name email profileImage accountType subscription' };
 
     // 1. Today's Trending – last 24h, engagement score (likes + comments*2 + views*0.1)
     const todayTrending = await Post.find({
       ...baseQuery,
       createdAt: { $gte: oneDayAgo },
     })
-      .populate(populateAuthor[0])
-      .populate(populateAuthor[1])
-      .populate(populateAuthor[2])
+      .populate(populateAuthor)
       .limit(TRENDING_LIMIT * 3)
       .lean();
 
@@ -541,9 +807,7 @@ export const getTrendingSections = async (req, res) => {
       ...baseQuery,
       createdAt: { $gte: sevenDaysAgo },
     })
-      .populate(populateAuthor[0])
-      .populate(populateAuthor[1])
-      .populate(populateAuthor[2])
+      .populate(populateAuthor)
       .limit(TRENDING_LIMIT * 2)
       .lean();
     const topLiked = topLikedRaw
@@ -555,9 +819,7 @@ export const getTrendingSections = async (req, res) => {
       ...baseQuery,
       createdAt: { $gte: sevenDaysAgo },
     })
-      .populate(populateAuthor[0])
-      .populate(populateAuthor[1])
-      .populate(populateAuthor[2])
+      .populate(populateAuthor)
       .limit(TRENDING_LIMIT * 3)
       .lean();
     const mostDiscussedSorted = mostDiscussedRaw
@@ -566,16 +828,14 @@ export const getTrendingSections = async (req, res) => {
 
     // 4. Most Viewed – all time, highest viewCount
     const mostViewed = await Post.find(baseQuery)
-      .populate(populateAuthor[0])
-      .populate(populateAuthor[1])
-      .populate(populateAuthor[2])
+      .populate(populateAuthor)
       .sort({ viewCount: -1 })
       .limit(TRENDING_LIMIT)
       .lean();
 
     await notifyNewlyTrendingPosts(todaySorted, topLiked, mostDiscussedSorted, mostViewed);
 
-    res.status(200).json({
+    const body = {
       success: true,
       data: {
         todayTrending: todaySorted,
@@ -583,7 +843,9 @@ export const getTrendingSections = async (req, res) => {
         mostDiscussed: mostDiscussedSorted,
         mostViewed,
       },
-    });
+    };
+    trendingSectionsCache = { atMs: nowMs, body };
+    res.status(200).json(body);
   } catch (error) {
     console.error('getTrendingSections error:', error);
     res.status(500).json({
@@ -1375,33 +1637,40 @@ export const updatePost = async (req, res) => {
     }
 
     let videoThumbnailUrl = null;
-    if (thumbnailFile) {
+    if (thumbnailFile?.path) {
       try {
-        const result = await cloudinary.uploader.upload(thumbnailFile.path, {
+        const result = await uploadMediaFromPath(thumbnailFile.path, {
           folder: 'chat-app/posts/thumbnails',
           resource_type: 'image',
+          contentType: thumbnailFile.mimetype,
+          originalFilename: thumbnailFile.originalname,
         });
         videoThumbnailUrl = result.secure_url;
-        if (fs.existsSync(thumbnailFile.path)) fs.unlinkSync(thumbnailFile.path);
       } catch (e) {
         console.error('Error uploading video thumbnail:', e);
+      } finally {
+        await fs.promises.unlink(thumbnailFile.path).catch(() => {});
       }
     }
 
     const imageUrls = [...existingImages];
     for (const file of files) {
       if (!file.path) continue;
-      const isImage = file.mimetype && file.mimetype.startsWith('image/');
-      if (!isImage) continue;
       try {
-        const result = await cloudinary.uploader.upload(file.path, {
+        const isImage = file.mimetype && file.mimetype.startsWith('image/');
+        if (!isImage) continue;
+
+        const result = await uploadMediaFromPath(file.path, {
           folder: 'chat-app/posts',
           resource_type: 'image',
+          contentType: file.mimetype,
+          originalFilename: file.originalname,
         });
         imageUrls.push(result.secure_url);
-        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
       } catch (e) {
         console.error('Error uploading image:', e);
+      } finally {
+        if (file?.path) await fs.promises.unlink(file.path).catch(() => {});
       }
     }
 
@@ -1457,27 +1726,37 @@ export const deletePost = async (req, res) => {
       });
     }
 
-    // Delete images from Cloudinary if any
     if (post.images && post.images.length > 0) {
       for (const imageUrl of post.images) {
         try {
-          const publicId = imageUrl.split('/').slice(-2).join('/').split('.')[0];
-          await cloudinary.uploader.destroy(`chat-app/posts/${publicId}`);
+          await deleteStoredMediaUrl(imageUrl);
         } catch (error) {
-          console.error('Error deleting image from Cloudinary:', error);
+          console.error('Error deleting post image:', error);
         }
       }
     }
 
-    // Delete song if exists
     if (post.song) {
       try {
-        const publicId = post.song.split('/').slice(-2).join('/').split('.')[0];
-        await cloudinary.uploader.destroy(`chat-app/posts/songs/${publicId}`, {
-          resource_type: 'video'
-        });
+        await deleteStoredMediaUrl(post.song);
       } catch (error) {
-        console.error('Error deleting song from Cloudinary:', error);
+        console.error('Error deleting post song:', error);
+      }
+    }
+
+    if (post.video) {
+      try {
+        await deleteStoredMediaUrl(post.video);
+      } catch (error) {
+        console.error('Error deleting post video:', error);
+      }
+    }
+
+    if (post.videoThumbnail) {
+      try {
+        await deleteStoredMediaUrl(post.videoThumbnail);
+      } catch (error) {
+        console.error('Error deleting post video thumbnail:', error);
       }
     }
 

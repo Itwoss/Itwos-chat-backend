@@ -111,5 +111,7 @@ messageSchema.index({ chatId: 1, hiddenFor: 1 });
 
 const Message = mongoose.model('Message', messageSchema);
 
+export const MESSAGE_TYPE_VALUES = [...messageSchema.path('messageType').enumValues];
+
 export default Message;
 

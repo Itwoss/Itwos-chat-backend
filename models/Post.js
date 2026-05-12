@@ -55,18 +55,18 @@ const postSchema = new mongoose.Schema({
     url: { type: String, trim: true, default: '' },
   }],
   images: [{
-    type: String, // Cloudinary URLs
+    type: String, // HTTPS image URLs (e.g. R2)
   }],
   song: {
-    type: String, // Cloudinary URL for audio file
+    type: String, // HTTPS URL for audio file
     default: null
   },
   video: {
-    type: String, // Cloudinary URL for video file
+    type: String, // HTTPS URL for video file
     default: null
   },
   videoThumbnail: {
-    type: String, // Cloudinary URL for video thumbnail image
+    type: String, // HTTPS URL for video thumbnail image
     default: null
   },
   videoRatio: {

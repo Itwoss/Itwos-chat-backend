@@ -48,15 +48,6 @@ services:
       - key: JWT_EXPIRE
         value: "7d"
         scope: RUN_TIME
-      - key: CLOUDINARY_CLOUD_NAME
-        value: "your_cloudinary_cloud_name"
-        scope: RUN_TIME
-      - key: CLOUDINARY_API_KEY
-        value: "your_cloudinary_api_key"
-        scope: RUN_TIME
-      - key: CLOUDINARY_API_SECRET
-        value: "your_cloudinary_api_secret"
-        scope: RUN_TIME
       - key: ENCRYPTION_KEY
         value: "your_encryption_key"
         scope: RUN_TIME
@@ -68,4 +59,20 @@ services:
         scope: RUN_TIME
       - key: YOUTUBE_API_KEY
         value: "your_youtube_api_key"
+        scope: RUN_TIME
+      # Cloudflare R2 (media storage — required)
+      - key: R2_ACCOUNT_ID
+        value: "your_r2_account_id"
+        scope: RUN_TIME
+      - key: R2_ACCESS_KEY_ID
+        value: "your_r2_access_key_id"
+        scope: RUN_TIME
+      - key: R2_SECRET_ACCESS_KEY
+        value: "your_r2_secret_access_key"
+        scope: RUN_TIME
+      - key: R2_BUCKET_NAME
+        value: "your_r2_bucket"
+        scope: RUN_TIME
+      - key: R2_PUBLIC_BASE_URL
+        value: "https://pub-xxxx.r2.dev"
         scope: RUN_TIME

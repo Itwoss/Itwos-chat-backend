@@ -1,6 +1,6 @@
 import Team from '../models/Team.js';
 import { validationResult } from 'express-validator';
-import cloudinary from '../utils/cloudinary.js';
+import { uploadMediaFromPath, deleteStoredMediaUrl } from '../utils/mediaStorage.js';
 
 // Get all team members
 export const getAllTeams = async (req, res) => {
@@ -96,12 +96,15 @@ export const createTeam = async (req, res) => {
     const { name, role, email, bio, socialLinks } = req.body;
     let imageUrl = '';
 
-    // Upload image to Cloudinary if provided
+    // Upload image to object storage (R2) if provided
     if (req.file) {
       try {
         const fs = await import('fs');
-        const result = await cloudinary.uploader.upload(req.file.path, {
+        const result = await uploadMediaFromPath(req.file.path, {
           folder: 'chat-app/team',
+          resource_type: 'image',
+          contentType: req.file.mimetype,
+          originalFilename: req.file.originalname,
         });
         imageUrl = result.secure_url;
         // Delete temporary file
@@ -180,16 +183,18 @@ export const updateTeam = async (req, res) => {
     // Handle image upload if new file is provided
     if (req.file) {
       try {
-        // Delete old image from Cloudinary if exists
+        // Delete old image from storage if it is on our R2 public origin
         if (team.image) {
-          const publicId = team.image.split('/').pop().split('.')[0];
-          await cloudinary.uploader.destroy(`chat-app/team/${publicId}`);
+          await deleteStoredMediaUrl(team.image);
         }
 
         // Upload new image
         const fs = await import('fs');
-        const result = await cloudinary.uploader.upload(req.file.path, {
+        const result = await uploadMediaFromPath(req.file.path, {
           folder: 'chat-app/team',
+          resource_type: 'image',
+          contentType: req.file.mimetype,
+          originalFilename: req.file.originalname,
         });
         team.image = result.secure_url;
         // Delete temporary file
@@ -234,13 +239,12 @@ export const deleteTeam = async (req, res) => {
       });
     }
 
-    // Delete image from Cloudinary if exists
+    // Delete team image from R2 when URL matches our public base
     if (team.image) {
       try {
-        const publicId = team.image.split('/').pop().split('.')[0];
-        await cloudinary.uploader.destroy(`chat-app/team/${publicId}`);
+        await deleteStoredMediaUrl(team.image);
       } catch (error) {
-        console.error('Error deleting image from Cloudinary:', error);
+        console.error('Error deleting team image:', error);
       }
     }
 

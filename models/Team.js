@@ -21,7 +21,7 @@ const teamSchema = new mongoose.Schema({
     trim: true
   },
   image: {
-    type: String, // Cloudinary URL
+    type: String, // HTTPS image URL (e.g. R2)
     trim: true
   },
   socialLinks: {

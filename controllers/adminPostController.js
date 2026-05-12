@@ -1,7 +1,7 @@
 import Post from '../models/Post.js';
 import User from '../models/User.js';
 import { createNotification } from './notificationController.js';
-import cloudinary from '../utils/cloudinary.js';
+import { deleteStoredMediaUrl } from '../utils/mediaStorage.js';
 
 // Get all posts (admin) with filtering
 export const getAllPosts = async (req, res) => {
@@ -234,27 +234,37 @@ export const deletePostPermanently = async (req, res) => {
       });
     }
 
-    // Delete images from Cloudinary if any
     if (post.images && post.images.length > 0) {
       for (const imageUrl of post.images) {
         try {
-          const publicId = imageUrl.split('/').slice(-2).join('/').split('.')[0];
-          await cloudinary.uploader.destroy(`chat-app/posts/${publicId}`);
+          await deleteStoredMediaUrl(imageUrl);
         } catch (error) {
-          console.error('Error deleting image from Cloudinary:', error);
+          console.error('Error deleting post image:', error);
         }
       }
     }
 
-    // Delete song if exists
     if (post.song) {
       try {
-        const publicId = post.song.split('/').slice(-2).join('/').split('.')[0];
-        await cloudinary.uploader.destroy(`chat-app/posts/songs/${publicId}`, {
-          resource_type: 'video'
-        });
+        await deleteStoredMediaUrl(post.song);
       } catch (error) {
-        console.error('Error deleting song from Cloudinary:', error);
+        console.error('Error deleting post song:', error);
+      }
+    }
+
+    if (post.video) {
+      try {
+        await deleteStoredMediaUrl(post.video);
+      } catch (error) {
+        console.error('Error deleting post video:', error);
+      }
+    }
+
+    if (post.videoThumbnail) {
+      try {
+        await deleteStoredMediaUrl(post.videoThumbnail);
+      } catch (error) {
+        console.error('Error deleting post video thumbnail:', error);
       }
     }
 

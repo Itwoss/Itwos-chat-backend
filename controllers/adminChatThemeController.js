@@ -1,8 +1,7 @@
 import ChatTheme from '../models/ChatTheme.js';
 import fs from 'fs';
 import mongoose from 'mongoose';
-
-const cloudinary = (await import('../utils/cloudinary.js')).default;
+import { uploadMediaFromPath } from '../utils/mediaStorage.js';
 
 export const getAllChatThemes = async (req, res) => {
   try {
@@ -45,7 +44,12 @@ export const getChatThemeById = async (req, res) => {
 
 const uploadImage = async (file, folder) => {
   if (!file || !file.path) return null;
-  const result = await cloudinary.uploader.upload(file.path, { folder, resource_type: 'image' });
+  const result = await uploadMediaFromPath(file.path, {
+    folder,
+    resource_type: 'image',
+    contentType: file.mimetype,
+    originalFilename: file.originalname,
+  });
   if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
   return result.secure_url;
 };

@@ -932,24 +932,25 @@ export const updateUserProfile = async (req, res) => {
     }
 
     // Handle profile image upload
-    if (req.file) {
+    if (req.file?.path) {
+      const fs = await import('fs');
       try {
-        const cloudinary = (await import('../utils/cloudinary.js')).default;
-        const fs = await import('fs');
-        const result = await cloudinary.uploader.upload(req.file.path, {
+        const { uploadMediaFromPath } = await import('../utils/mediaStorage.js');
+        const result = await uploadMediaFromPath(req.file.path, {
           folder: 'chat-app/users',
+          resource_type: 'image',
+          contentType: req.file.mimetype,
+          originalFilename: req.file.originalname,
         });
         user.profileImage = result.secure_url;
-        // Delete temporary file
-        if (fs.existsSync(req.file.path)) {
-          fs.unlinkSync(req.file.path);
-        }
       } catch (uploadError) {
         return res.status(500).json({
           success: false,
           message: 'Failed to upload image',
           error: uploadError.message
         });
+      } finally {
+        if (req.file?.path) await fs.promises.unlink(req.file.path).catch(() => {});
       }
     }
 

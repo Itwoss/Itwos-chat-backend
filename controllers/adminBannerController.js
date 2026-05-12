@@ -1,7 +1,7 @@
 import Banner from '../models/Banner.js';
 import BannerPayment from '../models/BannerPayment.js';
 import User from '../models/User.js';
-import cloudinary from '../utils/cloudinary.js';
+import { uploadMediaFromPath, deleteStoredMediaUrl } from '../utils/mediaStorage.js';
 import fs from 'fs';
 import mongoose from 'mongoose';
 
@@ -142,9 +142,11 @@ export const createBanner = async (req, res) => {
     // Handle image upload
     if (req.file) {
       try {
-        const result = await cloudinary.uploader.upload(req.file.path, {
+        const result = await uploadMediaFromPath(req.file.path, {
           folder: 'chat-app/banners',
-          resource_type: 'image'
+          resource_type: 'image',
+          contentType: req.file.mimetype,
+          originalFilename: req.file.originalname,
         });
         imageUrl = result.secure_url;
 
@@ -153,7 +155,7 @@ export const createBanner = async (req, res) => {
           fs.unlinkSync(req.file.path);
         }
       } catch (uploadError) {
-        console.error('Cloudinary upload error:', uploadError);
+        console.error('Banner image upload error:', uploadError);
         return res.status(500).json({
           success: false,
           message: 'Error uploading image',
@@ -250,14 +252,10 @@ export const updateBanner = async (req, res) => {
     // Handle new image upload
     if (req.file && !isCodeBanner) {
       try {
-        // Delete old image from Cloudinary if exists
+        // Replace previous banner image on R2 when URL matches our public base
         if (banner.imageUrl) {
           try {
-            // Extract public_id from Cloudinary URL
-            const urlParts = banner.imageUrl.split('/');
-            const filename = urlParts[urlParts.length - 1];
-            const publicId = `chat-app/banners/${filename.split('.')[0]}`;
-            await cloudinary.uploader.destroy(publicId);
+            await deleteStoredMediaUrl(banner.imageUrl);
           } catch (deleteError) {
             console.error('Error deleting old image:', deleteError);
             // Continue even if deletion fails
@@ -265,9 +263,11 @@ export const updateBanner = async (req, res) => {
         }
 
         // Upload new image
-        const result = await cloudinary.uploader.upload(req.file.path, {
+        const result = await uploadMediaFromPath(req.file.path, {
           folder: 'chat-app/banners',
-          resource_type: 'image'
+          resource_type: 'image',
+          contentType: req.file.mimetype,
+          originalFilename: req.file.originalname,
         });
         imageUrl = result.secure_url;
 
@@ -276,7 +276,7 @@ export const updateBanner = async (req, res) => {
           fs.unlinkSync(req.file.path);
         }
       } catch (uploadError) {
-        console.error('Cloudinary upload error:', uploadError);
+        console.error('Banner image upload error:', uploadError);
         return res.status(500).json({
           success: false,
           message: 'Error uploading image',
@@ -344,15 +344,11 @@ export const deleteBanner = async (req, res) => {
       });
     }
 
-    // Delete image from Cloudinary
     if (banner.imageUrl) {
       try {
-        const urlParts = banner.imageUrl.split('/');
-        const filename = urlParts[urlParts.length - 1];
-        const publicId = `chat-app/banners/${filename.split('.')[0]}`;
-        await cloudinary.uploader.destroy(publicId);
+        await deleteStoredMediaUrl(banner.imageUrl);
       } catch (deleteError) {
-        console.error('Error deleting image from Cloudinary:', deleteError);
+        console.error('Error deleting image from storage:', deleteError);
         // Continue even if deletion fails
       }
     }

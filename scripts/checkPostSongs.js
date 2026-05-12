@@ -77,8 +77,8 @@ const run = async () => {
     console.log(`Posts with valid song URL (https...): ${withNonEmptyString}`);
     console.log(`Posts with song null/empty/missing: ${withEmptyOrNull}`);
     console.log('');
-    console.log('Conclusion: If "valid song URL" is 0, posts were never saved with a Cloudinary URL.');
-    console.log('Fix: When creating a post with uploaded audio, the backend must set post.song = Cloudinary secure_url.');
+    console.log('Conclusion: If "valid song URL" is 0, posts were never saved with a public HTTPS song URL.');
+    console.log('Fix: When creating a post with uploaded audio, the backend must set post.song to the uploaded file URL (e.g. R2).');
   } catch (err) {
     console.error('Error:', err.message);
     process.exit(1);

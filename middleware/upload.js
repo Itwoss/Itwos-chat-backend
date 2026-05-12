@@ -6,6 +6,9 @@ import fs from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Disk staging before upload to R2, then files are unlinked.
+// For large video at scale, prefer direct-to-cloud (presigned URL / upload_stream) to avoid filling small VPS disks.
+
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {

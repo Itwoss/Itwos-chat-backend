@@ -50,6 +50,7 @@ import {
 } from './controllers/profileLikeController.js';
 import { addPostToProfile } from './controllers/postController.js';
 import { getOpenPostLandingHtml } from './controllers/openPostController.js';
+import directUploadRoutes from './routes/directUploadRoutes.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -171,6 +172,9 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+// Direct-to-cloud upload config (browser → Cloudflare R2 presigned PUT)
+app.use('/api/uploads', directUploadRoutes);
 
 // Database connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/chatapp')

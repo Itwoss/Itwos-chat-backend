@@ -4,7 +4,7 @@ import FriendRequest from '../models/FriendRequest.js';
 import User from '../models/User.js';
 import { createNotification } from './notificationController.js';
 import mongoose from 'mongoose';
-import cloudinary from '../utils/cloudinary.js';
+import { uploadMediaFromPath } from '../utils/mediaStorage.js';
 import fs from 'fs';
 
 /** Notify story owner over Socket.IO to refetch viewers (avoids static import cycle with server.js). */
@@ -38,15 +38,17 @@ export const createStory = async (req, res) => {
     if (mediaFile) {
       try {
         const isVideo = mediaFile.mimetype.startsWith('video/');
-        const result = await cloudinary.uploader.upload(mediaFile.path, {
+        const result = await uploadMediaFromPath(mediaFile.path, {
           folder: 'chat-app/stories',
           resource_type: isVideo ? 'video' : 'image',
+          contentType: mediaFile.mimetype,
+          originalFilename: mediaFile.originalname,
         });
         mediaUrl = result.secure_url;
         mediaType = isVideo ? 'video' : 'image';
         fs.unlinkSync(mediaFile.path); // Delete temporary file
       } catch (uploadError) {
-        console.error('[Story Controller] Cloudinary upload error:', uploadError);
+        console.error('[Story Controller] Media upload error:', uploadError);
         if (mediaFile && mediaFile.path) {
           fs.unlinkSync(mediaFile.path); // Clean up temp file
         }
@@ -68,9 +70,11 @@ export const createStory = async (req, res) => {
     const musicFile = req.files?.musicFile?.[0];
     if (musicFile) {
       try {
-        const result = await cloudinary.uploader.upload(musicFile.path, {
+        const result = await uploadMediaFromPath(musicFile.path, {
           folder: 'chat-app/stories/music',
-          resource_type: 'video', // Cloudinary uses 'video' for audio
+          resource_type: 'video',
+          contentType: musicFile.mimetype,
+          originalFilename: musicFile.originalname,
         });
         musicUrl = result.secure_url;
         fs.unlinkSync(musicFile.path); // Delete temporary file

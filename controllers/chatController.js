@@ -510,8 +510,10 @@ export const sendMessage = async (req, res) => {
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     let chatId = normalizeIdInput(body.chatId);
     let content = body.content != null ? String(body.content) : '';
+    const messageTypeIsProvided =
+      typeof body.messageType === 'string' && body.messageType.trim().length > 0;
     let messageType =
-      typeof body.messageType === 'string' && body.messageType.trim() ? body.messageType.trim() : 'text';
+      messageTypeIsProvided ? body.messageType.trim() : 'text';
     const replyTo = body.replyTo;
     const allowedTypes = ['text', 'image', 'file', 'audio', 'post_share'];
     if (!allowedTypes.includes(messageType)) messageType = 'text';
@@ -523,16 +525,46 @@ export const sendMessage = async (req, res) => {
       });
     }
 
+    // Direct-to-cloud: frontend uploads to R2 and sends only metadata.
+    const uploadedAttachments = Array.isArray(body.uploadedAttachments) ? body.uploadedAttachments : [];
+    const hasUploadedAttachments = uploadedAttachments.length > 0;
+
     let attachments = [];
-    const fs = await import('fs').then(m => m.default);
-    const cloudinary = (await import('../utils/cloudinary.js')).default;
-    const fileList = (Array.isArray(req.files) && req.files.length > 0)
-      ? req.files
-      : (req.files?.files && req.files.files.length > 0)
-        ? req.files.files
-        : req.file
-          ? [req.file]
-          : [];
+    if (hasUploadedAttachments) {
+      attachments = uploadedAttachments
+        .filter((a) => a && typeof a.url === 'string' && a.url.trim())
+        .map((a) => ({
+          url: a.url.trim(),
+          type: a.type,
+          name: a.name,
+        }));
+
+      // Infer messageType if caller didn't provide it.
+      if (!messageTypeIsProvided) {
+        const allImages = attachments.every((a) => a.type === 'image');
+        const hasAnyImage = attachments.some((a) => a.type === 'image');
+        const hasAnyAudio = attachments.some((a) => a.type === 'audio');
+        if (attachments.length > 1 && allImages) messageType = 'image';
+        else if (attachments.length === 1) {
+          messageType = attachments[0].type === 'image' ? 'image' : attachments[0].type === 'audio' ? 'audio' : 'file';
+        } else {
+          messageType = hasAnyAudio && !hasAnyImage ? 'audio' : hasAnyImage ? 'image' : 'file';
+        }
+      }
+    }
+
+    // Multipart upload fallback (legacy behavior)
+    const fileList = hasUploadedAttachments
+      ? []
+      : (Array.isArray(req.files) && req.files.length > 0)
+          ? req.files
+          : (req.files?.files && req.files.files.length > 0)
+            ? req.files.files
+            : req.file
+              ? [req.file]
+              : [];
+
+    const fs = await import('fs').then((m) => m.default);
 
     const q = req.query || {};
     const nestedShared = parseSharedPostNested(body);
@@ -547,7 +579,7 @@ export const sendMessage = async (req, res) => {
 
     let sharedPostSnapshot = null;
     if (rawSharedPostId) {
-      if (fileList.length > 0) {
+      if (fileList.length > 0 || attachments.length > 0) {
         return res.status(400).json({
           success: false,
           message: 'Cannot attach files to a shared post message',
@@ -620,19 +652,29 @@ export const sendMessage = async (req, res) => {
           messageType = hasAnyAudio && !hasAnyImage ? 'audio' : hasAnyImage ? 'image' : 'file';
         }
 
+        const { uploadMediaFromPath } = await import('../utils/mediaStorage.js');
         for (const file of fileList) {
-          const result = await cloudinary.uploader.upload(file.path, {
-            folder: 'chat-app/messages',
-            resource_type: 'auto',
-          });
-          const type = file.mimetype.startsWith('image/') ? 'image' : file.mimetype.startsWith('audio/') ? 'audio' : 'file';
-          attachments.push({
-            url: result.secure_url,
-            type,
-            name: file.originalname,
-          });
-          if (fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
+          try {
+            const result = await uploadMediaFromPath(file.path, {
+              folder: 'chat-app/messages',
+              resource_type: 'auto',
+              contentType: file.mimetype,
+              originalFilename: file.originalname,
+            });
+            const type = file.mimetype.startsWith('image/')
+              ? 'image'
+              : file.mimetype.startsWith('audio/')
+                ? 'audio'
+                : 'file';
+            attachments.push({
+              url: result.secure_url,
+              type,
+              name: file.originalname,
+            });
+          } finally {
+            if (file?.path) {
+              await fs.promises.unlink(file.path).catch(() => {});
+            }
           }
         }
 
@@ -647,6 +689,11 @@ export const sendMessage = async (req, res) => {
           error: uploadError.message
         });
       }
+    }
+
+    // Direct-attachment placeholder content (same behavior as legacy upload block).
+    if (attachments.length > 0 && (!content || content.trim() === '')) {
+      content = messageType === 'image' ? 'Image' : attachments.map(a => a.name).join(', ');
     }
 
     // Verify chat exists and user is participant - optimized query

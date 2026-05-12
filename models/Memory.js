@@ -8,7 +8,7 @@ const memorySchema = new mongoose.Schema({
     index: true,
   },
   images: [{
-    type: String, // Cloudinary URLs
+    type: String, // HTTPS image URLs (e.g. R2)
   }],
   title: {
     type: String,

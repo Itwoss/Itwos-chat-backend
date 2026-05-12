@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import { generateToken } from '../utils/generateToken.js';
 import { validationResult } from 'express-validator';
-import cloudinary from '../utils/cloudinary.js';
+import { uploadMediaFromPath } from '../utils/mediaStorage.js';
 import Team from '../models/Team.js';
 import DemoBooking from '../models/DemoBooking.js';
 import Meeting from '../models/Meeting.js';
@@ -333,8 +333,11 @@ export const updateAdminProfile = async (req, res) => {
     if (req.file) {
       try {
         const fs = await import('fs');
-        const result = await cloudinary.uploader.upload(req.file.path, {
+        const result = await uploadMediaFromPath(req.file.path, {
           folder: 'chat-app/admin',
+          resource_type: 'image',
+          contentType: req.file.mimetype,
+          originalFilename: req.file.originalname,
         });
         admin.profileImage = result.secure_url;
         // Delete temporary file
