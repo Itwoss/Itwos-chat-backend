@@ -644,38 +644,23 @@ function assertValidMongoUri() {
 async function startServer() {
   const redisUrl = (process.env.REDIS_URL || '').trim();
   if (isUsableRedisUrl(redisUrl)) {
-    let pub;
-    let sub;
     try {
       const { createClient } = await import('redis');
       const { createAdapter } = await import('@socket.io/redis-adapter');
-      pub = createClient({ url: redisUrl });
-      sub = pub.duplicate();
-      await Promise.all([pub.connect(), sub.connect()]);
-      redisPubClient = pub;
-      redisSubClient = sub;
-      io.adapter(createAdapter(pub, sub));
+      redisPubClient = createClient({ url: redisUrl });
+      redisSubClient = redisPubClient.duplicate();
+      await Promise.all([redisPubClient.connect(), redisSubClient.connect()]);
+      io.adapter(createAdapter(redisPubClient, redisSubClient));
       console.log('[Socket.IO] Redis adapter enabled (multi-instance ready)');
     } catch (err) {
-      const code = err?.code || err?.cause?.code;
       const msg = err?.message || String(err);
-      console.warn(
-        '[Socket.IO] Redis connect failed — using single-instance mode (no adapter).',
-        code || msg
-      );
-      console.warn(
-        '[Socket.IO] Tip: on your Mac unset or comment REDIS_URL in .env for local dev, or fix DNS/network to the Valkey host.'
-      );
+      console.warn('[Socket.IO] Redis connection failed — single-instance mode:', msg);
       try {
-        await sub?.quit?.();
-      } catch (_) {
-        /* ignore */
-      }
+        redisSubClient?.disconnect?.();
+      } catch (_) { /* ignore */ }
       try {
-        await pub?.quit?.();
-      } catch (_) {
-        /* ignore */
-      }
+        redisPubClient?.disconnect?.();
+      } catch (_) { /* ignore */ }
       redisPubClient = undefined;
       redisSubClient = undefined;
     }
