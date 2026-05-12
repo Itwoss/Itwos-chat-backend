@@ -596,12 +596,56 @@ app.set('isUserConnected', (userId) => {
 
 export { io, emitNotification, emitToAdminRoom, emitStoryViewersUpdated };
 
-httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log('Hi ITWOS');
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Socket.IO server is ready`);
-  const hasVapid = !!(process.env.VAPID_PUBLIC_KEY || '').trim() && !!(process.env.VAPID_PRIVATE_KEY || '').trim();
-  console.log(hasVapid ? '[Push] VAPID keys: configured' : '[Push] VAPID keys: MISSING — set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in .env (or production env)');
-  // Cron jobs run in a separate service (node cron.js). Set CRON_DISABLED=1 on API instances.
+/** Redis pub/sub clients — only when REDIS_URL is set (multi-instance Socket.IO). */
+let redisPubClient;
+let redisSubClient;
+
+async function startServer() {
+  const redisUrl = (process.env.REDIS_URL || '').trim();
+  if (redisUrl) {
+    const { createClient } = await import('redis');
+    const { createAdapter } = await import('@socket.io/redis-adapter');
+    redisPubClient = createClient({ url: redisUrl });
+    redisSubClient = redisPubClient.duplicate();
+    await Promise.all([redisPubClient.connect(), redisSubClient.connect()]);
+    io.adapter(createAdapter(redisPubClient, redisSubClient));
+    console.log('[Socket.IO] Redis adapter enabled (multi-instance ready)');
+  } else {
+    console.warn('[Socket.IO] REDIS_URL not set — single-instance mode (fine for one server)');
+  }
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log('Hi ITWOS');
+    console.log(`Server is running on port ${PORT}`);
+    console.log(`Socket.IO server is ready`);
+    const hasVapid = !!(process.env.VAPID_PUBLIC_KEY || '').trim() && !!(process.env.VAPID_PRIVATE_KEY || '').trim();
+    console.log(hasVapid ? '[Push] VAPID keys: configured' : '[Push] VAPID keys: MISSING — set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in .env (or production env)');
+    // Cron jobs run in a separate service (node cron.js). Set CRON_DISABLED=1 on API instances.
+  });
+}
+
+async function shutdown(signal) {
+  console.log(`${signal} received, shutting down`);
+  httpServer.close(() => {});
+  try {
+    if (redisSubClient) await redisSubClient.quit().catch(() => {});
+    if (redisPubClient) await redisPubClient.quit().catch(() => {});
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    await mongoose.connection.close();
+  } catch (_) {
+    /* ignore */
+  }
+  process.exit(0);
+}
+
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));
+
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
 
