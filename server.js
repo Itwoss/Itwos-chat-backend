@@ -177,7 +177,10 @@ app.use(cookieParser());
 app.use('/api/uploads', directUploadRoutes);
 
 // Database connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/chatapp')
+assertValidMongoUri();
+const defaultLocalMongo = 'mongodb://localhost:27017/chatapp';
+const mongoUriForConnect = (process.env.MONGODB_URI || '').trim() || defaultLocalMongo;
+mongoose.connect(mongoUriForConnect)
   .then(() => console.log('MongoDB connected successfully'))
   .catch((error) => console.error('MongoDB connection error:', error));
 
@@ -600,9 +603,47 @@ export { io, emitNotification, emitToAdminRoom, emitStoryViewersUpdated };
 let redisPubClient;
 let redisSubClient;
 
+/** True only for a real redis:// or rediss:// URL (avoids crash when .env still has placeholders). */
+function isUsableRedisUrl(url) {
+  const u = (url || '').trim();
+  if (!u) return false;
+  const lower = u.toLowerCase();
+  if (lower === 'your_redis_url' || lower === 'redis://' || lower === 'rediss://') return false;
+  if (/^your[_-]?redis/i.test(u)) return false;
+  try {
+    const parsed = new URL(u);
+    if (!parsed.hostname) return false;
+    return parsed.protocol === 'redis:' || parsed.protocol === 'rediss:';
+  } catch {
+    return false;
+  }
+}
+
+function assertValidMongoUri() {
+  const uri = (process.env.MONGODB_URI || '').trim();
+  if (!uri) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'MONGODB_URI is empty. Set it in /root/Itwos-chat-backend/.env (or your deploy env) to your Atlas mongodb+srv://... string.'
+      );
+    }
+    return;
+  }
+  if (/^your_mongodb/i.test(uri) || uri === 'your_mongodb_connection_string') {
+    throw new Error(
+      'MONGODB_URI is still the .env.example placeholder. Replace it with your real Atlas connection string (mongodb+srv://...).'
+    );
+  }
+  if (!uri.startsWith('mongodb://') && !uri.startsWith('mongodb+srv://')) {
+    throw new Error(
+      'MONGODB_URI must start with mongodb:// or mongodb+srv://. Check for typos, spaces, or quotes wrapping the whole URI in .env.'
+    );
+  }
+}
+
 async function startServer() {
   const redisUrl = (process.env.REDIS_URL || '').trim();
-  if (redisUrl) {
+  if (isUsableRedisUrl(redisUrl)) {
     const { createClient } = await import('redis');
     const { createAdapter } = await import('@socket.io/redis-adapter');
     redisPubClient = createClient({ url: redisUrl });
@@ -610,6 +651,10 @@ async function startServer() {
     await Promise.all([redisPubClient.connect(), redisSubClient.connect()]);
     io.adapter(createAdapter(redisPubClient, redisSubClient));
     console.log('[Socket.IO] Redis adapter enabled (multi-instance ready)');
+  } else if (redisUrl) {
+    console.warn(
+      '[Socket.IO] REDIS_URL is set but invalid or still a placeholder — ignoring; single-instance mode. Use rediss://... from DigitalOcean Redis when ready.'
+    );
   } else {
     console.warn('[Socket.IO] REDIS_URL not set — single-instance mode (fine for one server)');
   }
